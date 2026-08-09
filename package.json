@@ -1,0 +1,7 @@
+{
+  "name": "stamped",
+  "private": true,
+  "packageManager": "npm@10",
+  "workspaces": ["apps/*", "packages/*"],
+  "engines": { "node": ">=22 <25" }
+}
