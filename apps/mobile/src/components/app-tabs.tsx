@@ -27,6 +27,11 @@ export default function AppTabs() {
           renderingMode="template"
         />
       </NativeTabs.Trigger>
+
+      <NativeTabs.Trigger name="photo-gps">
+        <NativeTabs.Trigger.Label>Photos</NativeTabs.Trigger.Label>
+        <NativeTabs.Trigger.Icon sf="mappin.and.ellipse" md="place" />
+      </NativeTabs.Trigger>
     </NativeTabs>
   );
 }
