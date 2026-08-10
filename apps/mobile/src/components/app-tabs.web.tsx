@@ -27,6 +27,9 @@ export default function AppTabs() {
           <TabTrigger name="explore" href="/explore" asChild>
             <TabButton>Explore</TabButton>
           </TabTrigger>
+          <TabTrigger name="photo-gps" href="/photo-gps" asChild>
+            <TabButton>Photos</TabButton>
+          </TabTrigger>
         </CustomTabList>
       </TabList>
     </Tabs>
