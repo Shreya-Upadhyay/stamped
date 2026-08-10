@@ -7,24 +7,51 @@ import '@/global.css';
 
 import { Platform } from 'react-native';
 
+// Warm brown/cream/gold palette — matches the Stamped brand prototype.
 export const Colors = {
   light: {
-    text: '#000000',
-    background: '#ffffff',
-    backgroundElement: '#F0F0F3',
-    backgroundSelected: '#E0E1E6',
-    textSecondary: '#60646C',
+    text: '#2C1A0E',
+    background: '#FAF6F0',
+    backgroundElement: '#FFFFFF',
+    backgroundSelected: '#F5ECD7',
+    textSecondary: '#A08060',
+    brand: '#6B4220',
+    brandDark: '#4A2E15',
+    onBrand: '#FAF6F0',
+    accent: '#D4A96A',
+    accentLight: '#F5ECD7',
+    accentBorder: '#C4956A',
+    border: '#F0E4D0',
+    borderMid: '#E8D5C0',
+    success: '#2D8A4E',
   },
   dark: {
-    text: '#ffffff',
-    background: '#000000',
-    backgroundElement: '#212225',
-    backgroundSelected: '#2E3135',
-    textSecondary: '#B0B4BA',
+    text: '#FAF6F0',
+    background: '#2C1A0E',
+    backgroundElement: '#3A2818',
+    backgroundSelected: '#4A3020',
+    textSecondary: '#C0A080',
+    // Lightened vs. light mode's brand so it doesn't disappear into the near-black background.
+    brand: '#8A5A32',
+    brandDark: '#6B4220',
+    onBrand: '#FAF6F0',
+    accent: '#D4A96A',
+    accentLight: '#4A3020',
+    accentBorder: '#8A5A32',
+    border: '#4A3020',
+    borderMid: '#5A3518',
+    success: '#4EBE7C',
   },
 } as const;
 
 export type ThemeColor = keyof typeof Colors.light & keyof typeof Colors.dark;
+
+export const Radius = {
+  small: 8,
+  medium: 10,
+  large: 14,
+  pill: 999,
+} as const;
 
 export const Fonts = Platform.select({
   ios: {

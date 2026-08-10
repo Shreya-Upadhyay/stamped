@@ -4,8 +4,8 @@
     {
       "name": "mobile",
       "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "web", "--workspace", "apps/mobile"],
-      "port": 8081
+      "runtimeArgs": ["run", "web", "--workspace", "apps/mobile", "--", "--port", "8092"],
+      "port": 8092
     }
   ]
 }
