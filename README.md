@@ -11,7 +11,24 @@ backend is called, and no paid API is used.
 
 ## What works today
 
-The full trip-grouping flow is built and runs on a real device:
+The app runs end to end from first launch through to grouped trips.
+
+### Onboarding (presentational)
+
+| Screen | What it does |
+|---|---|
+| **Welcome** | Rotating globe, brand intro |
+| **Sign up / Sign in** | Google · Instagram · Facebook · mobile OTP |
+| **OTP** | Six-box code entry, simulated SMS auto-fill, resend countdown |
+| **Profile** | Confirms the details the provider "returned", plus home city |
+| **Permissions** | Explains what the app will ask for and why |
+| **Consent** | Data-use preferences |
+
+> **Sign-in is deliberately not real.** No password or token is ever handled, and no
+> account exists. Nothing in the photo → GPS → clustering pipeline needs one, so real
+> auth is a later milestone (see *Adding real auth* below).
+
+### Trip grouping (fully functional)
 
 | Step | Screen | What it does |
 |---|---|---|
@@ -28,8 +45,11 @@ Also done:
 - **Design system** — the warm brown/cream/gold Stamped look, light + dark mode
 - **Handles photos with no GPS** as a first-class case, not a crash
 
-Not built yet (deliberately — see `docs/ROADMAP.md`): accounts/auth, uploading photos,
+Not built yet (deliberately — see `docs/ROADMAP.md`): real accounts, uploading photos,
 saving trips to a server, POI/venue names, AI trip write-ups, sharing.
+
+**Trips are not saved.** They exist only for the length of a session; closing the app
+loses them. Persistence is the next milestone.
 
 ---
 
@@ -69,7 +89,8 @@ cd apps/mobile
 npx expo start --web
 ```
 
-Opens at `http://localhost:8081`. Click the **Photos** tab.
+Opens at `http://localhost:8081`. You'll land on **Welcome** — click through onboarding,
+then **Find my trips** (or the **Photos** tab).
 
 The photo picker itself is native-only (`expo-media-library` has no web build), so on web
 the flow runs against **nine built-in fixture photos** — Paris, Rome, Tokyo, plus one with
@@ -181,7 +202,13 @@ involved. When changing how trips are grouped, **write the test first** — the 
 
 ```
 apps/mobile/                  Expo app (Expo Router, TypeScript)
-  src/app/                    Routes. photo-gps.tsx = native, photo-gps.web.tsx = web fixtures
+  src/app/
+    _layout.tsx               Session gate — picks onboarding or the app
+    (onboarding)/             welcome, signup, signin, otp, profile, permissions, consent
+    (tabs)/                   Home, Explore, Photos
+      photo-gps.tsx           native (real camera roll)
+      photo-gps.web.tsx       web (fixtures)
+  src/features/auth/          Session state — the seam a real auth backend plugs into
   src/features/trips/         The trip flow UI + its PhotoSource seam
   src/components/ui/          Design-system pieces (buttons, cards, header, progress)
   src/constants/theme.ts      Colour palette, spacing, radii
@@ -192,6 +219,13 @@ docs/ROADMAP.md               Milestone plan and data model
 docs/adr/                     Short records of decisions already settled
 tools/                        Dev utilities (sample photo generator)
 ```
+
+### Navigation
+
+The root layout (`src/app/_layout.tsx`) holds two route groups and swaps between them
+with `Stack.Protected`, guarded on session state. Onboarding shows until it completes;
+after that the tab bar takes over. Onboarding replays on every launch — nothing is
+persisted yet, which is convenient while demoing.
 
 ### How the same UI runs on both web and device
 
@@ -224,6 +258,26 @@ doesn't anchor to a "home city" the way `docs/ROADMAP.md` originally sketched �
 
 ---
 
+## Adding real auth later
+
+Everything an auth backend would provide sits behind one interface,
+`src/features/auth/session.tsx`. Screens only ever call `signInWith`,
+`completeOnboarding` and read `profile` — none of them know how a session is produced.
+
+Swapping in Firebase Auth means reimplementing `SessionProvider` against it. No screen
+needs to change. (Same idea as the `PhotoSource` seam for photos.)
+
+Worth knowing before you start that work:
+
+- **Firebase is not needed for anything currently built.** Reading photos, extracting
+  GPS, clustering, and reverse-geocoding all run on-device. Firebase becomes relevant
+  for *saving* trips, not for producing them.
+- Google sign-in needs a Firebase project plus OAuth client IDs per platform, native
+  config in `app.json`, and **a new dev-client build** before it can be tested.
+- Phone OTP needs billing enabled on the Firebase project.
+- Instagram and Facebook login need their own Meta developer apps — Firebase alone
+  doesn't cover them.
+
 ## Known limitations
 
 - **iPhone testing is blocked** without an Apple Developer account or a Mac (above).
@@ -232,8 +286,24 @@ doesn't anchor to a "home city" the way `docs/ROADMAP.md` originally sketched �
   Works on a real device with network, and on web.
 - **Trips are not saved.** They live in screen state only; leaving the screen loses them.
   Persistence is a later milestone.
+- **Sign-in is presentational** — see *Adding real auth* above.
 - `services/` is referenced in `CLAUDE.md` but does not exist yet — the backend is not part
   of this milestone.
+
+### Gotcha: stale generated route types
+
+Expo Router generates `.expo/types/router.d.ts` from your route files. If you add files
+**while the dev server is running**, that generator can end up polluted — `tsc` then
+reports nonsense like `"/signup" is not assignable` or lists non-route files as routes,
+even though the app runs fine.
+
+Fix is a cold restart:
+
+```bash
+rm -rf apps/mobile/.expo && npx expo start --clear
+```
+
+If `tsc` disagrees with an app that visibly works, suspect this first.
 
 ---
 
