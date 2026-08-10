@@ -27,6 +27,20 @@ export default function AppTabs() {
           renderingMode="template"
         />
       </NativeTabs.Trigger>
+
+      <NativeTabs.Trigger name="photo-gps">
+        <NativeTabs.Trigger.Label>Photos</NativeTabs.Trigger.Label>
+        {/*
+          `src` (a bundled PNG) rather than `md`: the Material Symbols icon set
+          downloads a font at runtime, which fails on a device that can't reach
+          the dev server's asset endpoint. `sf` still gives iOS a native symbol.
+        */}
+        <NativeTabs.Trigger.Icon
+          sf="mappin.and.ellipse"
+          src={require('@/assets/images/tabIcons/photos.png')}
+          renderingMode="template"
+        />
+      </NativeTabs.Trigger>
     </NativeTabs>
   );
 }

@@ -1,0 +1,31 @@
+# dependencies
+node_modules/
+
+# secrets
+.env
+.env.*
+
+# Expo / Metro
+.expo/
+dist/
+web-build/
+expo-env.d.ts
+.metro-health-check*
+
+# generated test fixtures (see tools/make-sample-photos.py)
+sample-photos/
+
+# build output
+*.apk
+*.aab
+*.ipa
+
+# logs
+npm-debug.*
+yarn-debug.*
+yarn-error.*
+*.log
+
+# editor / OS
+.DS_Store
+Thumbs.db
