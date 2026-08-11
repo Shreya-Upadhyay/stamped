@@ -1,4 +1,3 @@
-import { useRouter } from 'expo-router';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
@@ -20,14 +19,13 @@ const CONSENTS = [
   { label: 'Allow anonymous analytics to improve the app', group: null },
 ] as const;
 
-export default function ConsentScreen() {
-  const router = useRouter();
+export default function ConsentStep() {
   const theme = useTheme();
   const profile = useDraftProfile();
   const { completeOnboarding } = useSession();
 
-  // Unlocks the (tabs) group; the root layout's guard swaps the stacks, and
-  // the tabs layout then opens on trip detection.
+  // Marks onboarding complete, then hands off to the app. The tabs layout's
+  // guard now passes, so "/" renders the app rather than bouncing back here.
   const finish = () => completeOnboarding(profile);
 
   return (

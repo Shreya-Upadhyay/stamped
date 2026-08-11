@@ -1,4 +1,3 @@
-import { useRouter } from 'expo-router';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -10,8 +9,9 @@ import { PhoneFrame } from '@/components/ui/phone-frame';
 import { Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
-export default function WelcomeScreen() {
-  const router = useRouter();
+type Props = { onSignUp: () => void; onSignIn: () => void };
+
+export default function WelcomeStep({ onSignUp, onSignIn }: Props) {
   const insets = useSafeAreaInsets();
   const theme = useTheme();
 
@@ -37,8 +37,8 @@ export default function WelcomeScreen() {
           </ThemedText>
         </View>
 
-        <PrimaryButton label="Get started — it's free" onPress={() => router.push('/signup')} />
-        <GhostButton label="Sign in" onPress={() => router.push('/signin')} />
+        <PrimaryButton label="Get started — it's free" onPress={onSignUp} />
+        <GhostButton label="Sign in" onPress={onSignIn} />
       </ThemedView>
     </PhoneFrame>
   );

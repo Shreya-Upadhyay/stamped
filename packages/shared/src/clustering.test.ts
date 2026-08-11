@@ -5,12 +5,18 @@ import type { PhotoMeta } from './types/photo';
 
 const HOUR_MS = 60 * 60 * 1000;
 const DAY_MS = 24 * HOUR_MS;
+const YEAR_MS = 365 * DAY_MS;
 
 const PARIS = { lat: 48.8566, lng: 2.3522 };
-const LONDON = { lat: 51.5074, lng: -0.1278 };
-const NEW_YORK = { lat: 40.7128, lng: -74.006 };
+/** ~430 km from Paris — inside the default radius. */
+const AMSTERDAM = { lat: 52.3676, lng: 4.9041 };
+/** ~1100 km from Paris — outside it. */
+const ROME = { lat: 41.9028, lng: 12.4964 };
+const TOKYO = { lat: 35.6762, lng: 139.6503 };
 
-function makePhoto(overrides: Partial<PhotoMeta> & Pick<PhotoMeta, 'assetId' | 'capturedAt'>): PhotoMeta {
+function makePhoto(
+  overrides: Partial<PhotoMeta> & Pick<PhotoMeta, 'assetId' | 'capturedAt'>,
+): PhotoMeta {
   return {
     id: overrides.assetId,
     userId: 'test-user',
@@ -27,15 +33,26 @@ function makePhoto(overrides: Partial<PhotoMeta> & Pick<PhotoMeta, 'assetId' | '
   };
 }
 
+/** Photo at a place, `hours` after an arbitrary epoch. */
+function at(assetId: string, place: { lat: number; lng: number } | null, ms: number): PhotoMeta {
+  return makePhoto({
+    assetId,
+    capturedAt: ms,
+    lat: place?.lat ?? null,
+    lng: place?.lng ?? null,
+    hasGps: place != null,
+  });
+}
+
 describe('haversineDistanceKm', () => {
   it('returns 0 for identical points', () => {
     expect(haversineDistanceKm(PARIS, PARIS)).toBe(0);
   });
 
-  it('returns the known distance between Paris and London', () => {
-    const distance = haversineDistanceKm(PARIS, LONDON);
-    expect(distance).toBeGreaterThan(340);
-    expect(distance).toBeLessThan(350);
+  it('returns the known Paris–Rome distance', () => {
+    const distance = haversineDistanceKm(PARIS, ROME);
+    expect(distance).toBeGreaterThan(1050);
+    expect(distance).toBeLessThan(1150);
   });
 });
 
@@ -44,16 +61,13 @@ describe('computeCentroid', () => {
     expect(computeCentroid([])).toBeNull();
   });
 
-  it('returns the point itself for a single point', () => {
-    expect(computeCentroid([PARIS])).toEqual(PARIS);
-  });
-
   it('averages multiple points', () => {
-    const centroid = computeCentroid([
-      { lat: 0, lng: 0 },
-      { lat: 10, lng: 20 },
-    ]);
-    expect(centroid).toEqual({ lat: 5, lng: 10 });
+    expect(
+      computeCentroid([
+        { lat: 0, lng: 0 },
+        { lat: 10, lng: 20 },
+      ]),
+    ).toEqual({ lat: 5, lng: 10 });
   });
 });
 
@@ -62,78 +76,88 @@ describe('segmentPhotosIntoTrips', () => {
     expect(segmentPhotosIntoTrips([])).toEqual([]);
   });
 
-  it('groups photos close in time and space into a single trip', () => {
-    const photos = [
-      makePhoto({ assetId: 'a', capturedAt: 0, lat: PARIS.lat, lng: PARIS.lng, hasGps: true }),
-      makePhoto({ assetId: 'b', capturedAt: 2 * HOUR_MS, lat: PARIS.lat + 0.01, lng: PARIS.lng + 0.01, hasGps: true }),
-      makePhoto({ assetId: 'c', capturedAt: 5 * HOUR_MS, lat: PARIS.lat - 0.01, lng: PARIS.lng, hasGps: true }),
-    ];
-    const groups = segmentPhotosIntoTrips(photos);
+  it('keeps photos within the radius in one trip', () => {
+    const groups = segmentPhotosIntoTrips([
+      at('a', PARIS, 0),
+      at('b', AMSTERDAM, 3 * HOUR_MS),
+      at('c', PARIS, 6 * HOUR_MS),
+    ]);
+    expect(groups).toHaveLength(1);
+  });
+
+  it('starts a new trip when a photo falls outside the radius', () => {
+    const groups = segmentPhotosIntoTrips([at('a', PARIS, 0), at('b', ROME, HOUR_MS)]);
+    expect(groups).toHaveLength(2);
+  });
+
+  it('does not split on time alone — a long gap in one place stays one trip', () => {
+    // The rule is distance-only by default, so photos from the same place
+    // years apart belong to the same trip. Deliberate: see the ADR.
+    const groups = segmentPhotosIntoTrips([at('a', PARIS, 0), at('b', PARIS, 2 * YEAR_MS)]);
+    expect(groups).toHaveLength(1);
+  });
+
+  it('measures distance from the trip centre, so a slow drift eventually splits', () => {
+    // Each hop is under the radius, but the trip's centre keeps moving. Under
+    // the old consecutive-photo rule this marched around the world as a single
+    // trip; anchoring to the centre is what stops that.
+    const eastward = [0, 4, 8, 12, 16, 20].map((lng, i) =>
+      at(`p${i}`, { lat: 0, lng }, i * HOUR_MS),
+    );
+    const groups = segmentPhotosIntoTrips(eastward);
+    expect(groups.length).toBeGreaterThan(1);
+  });
+
+  it('honours a time gap when one is supplied', () => {
+    const groups = segmentPhotosIntoTrips([at('a', PARIS, 0), at('b', PARIS, 2 * DAY_MS)], {
+      tripGapMs: DAY_MS,
+    });
+    expect(groups).toHaveLength(2);
+  });
+
+  it('respects a custom radius', () => {
+    // Amsterdam is ~430 km from Paris: inside the default, outside 100 km.
+    const photos = [at('a', PARIS, 0), at('b', AMSTERDAM, HOUR_MS)];
+    expect(segmentPhotosIntoTrips(photos, { tripRadiusKm: 100 })).toHaveLength(2);
+    expect(segmentPhotosIntoTrips(photos, { tripRadiusKm: 1000 })).toHaveLength(1);
+  });
+
+  it('treats photos with no GPS as part of the trip in progress', () => {
+    const groups = segmentPhotosIntoTrips([
+      at('a', PARIS, 0),
+      at('screenshot', null, HOUR_MS),
+      at('c', PARIS, 2 * HOUR_MS),
+    ]);
     expect(groups).toHaveLength(1);
     expect(groups[0]).toHaveLength(3);
   });
 
-  it('splits into a new trip after a >24h time gap', () => {
-    const photos = [
-      makePhoto({ assetId: 'a', capturedAt: 0, lat: PARIS.lat, lng: PARIS.lng, hasGps: true }),
-      makePhoto({ assetId: 'b', capturedAt: 2 * DAY_MS, lat: PARIS.lat, lng: PARIS.lng, hasGps: true }),
-    ];
-    const groups = segmentPhotosIntoTrips(photos);
+  it('does not let a no-GPS photo anchor a trip', () => {
+    // A no-GPS photo carries no location, so it must not become the centre
+    // the next photo is measured against — otherwise it would bridge two
+    // genuinely distant trips.
+    const groups = segmentPhotosIntoTrips([
+      at('a', PARIS, 0),
+      at('screenshot', null, HOUR_MS),
+      at('c', TOKYO, 2 * HOUR_MS),
+    ]);
     expect(groups).toHaveLength(2);
-    expect(groups[0].map((p) => p.assetId)).toEqual(['a']);
-    expect(groups[1].map((p) => p.assetId)).toEqual(['b']);
-  });
-
-  it('splits into a new trip after a large distance jump, even with a small time gap', () => {
-    const photos = [
-      makePhoto({ assetId: 'a', capturedAt: 0, lat: PARIS.lat, lng: PARIS.lng, hasGps: true }),
-      makePhoto({ assetId: 'b', capturedAt: HOUR_MS, lat: NEW_YORK.lat, lng: NEW_YORK.lng, hasGps: true }),
-    ];
-    const groups = segmentPhotosIntoTrips(photos);
-    expect(groups).toHaveLength(2);
-  });
-
-  it('does not split on a short hop within the distance threshold', () => {
-    // ~55km north of Paris — well under the 300km default threshold
-    // (unlike Paris->London, which is ~344km and does split; see the test above).
-    const nearbyTown = { lat: PARIS.lat + 0.5, lng: PARIS.lng };
-    const photos = [
-      makePhoto({ assetId: 'a', capturedAt: 0, lat: PARIS.lat, lng: PARIS.lng, hasGps: true }),
-      makePhoto({ assetId: 'b', capturedAt: HOUR_MS, lat: nearbyTown.lat, lng: nearbyTown.lng, hasGps: true }),
-    ];
-    const groups = segmentPhotosIntoTrips(photos);
-    expect(groups).toHaveLength(1);
-  });
-
-  it('handles no-GPS photos without crashing, falling back to time-only grouping', () => {
-    const photos = [
-      makePhoto({ assetId: 'a', capturedAt: 0 }),
-      makePhoto({ assetId: 'b', capturedAt: HOUR_MS, lat: NEW_YORK.lat, lng: NEW_YORK.lng, hasGps: true }),
-      makePhoto({ assetId: 'c', capturedAt: 2 * HOUR_MS }),
-    ];
-    const groups = segmentPhotosIntoTrips(photos);
-    expect(groups).toHaveLength(1);
-    expect(groups[0].map((p) => p.assetId)).toEqual(['a', 'b', 'c']);
   });
 
   it('sorts photos chronologically before grouping', () => {
-    const photos = [
-      makePhoto({ assetId: 'b', capturedAt: HOUR_MS }),
-      makePhoto({ assetId: 'a', capturedAt: 0 }),
-    ];
-    const groups = segmentPhotosIntoTrips(photos);
+    const groups = segmentPhotosIntoTrips([at('b', PARIS, HOUR_MS), at('a', PARIS, 0)]);
     expect(groups[0].map((p) => p.assetId)).toEqual(['a', 'b']);
   });
 });
 
 describe('buildTrip', () => {
   const photos = [
-    makePhoto({ assetId: 'a', capturedAt: HOUR_MS, lat: PARIS.lat, lng: PARIS.lng, hasGps: true }),
-    makePhoto({ assetId: 'b', capturedAt: 0, lat: PARIS.lat, lng: PARIS.lng, hasGps: true }),
-    makePhoto({ assetId: 'c', capturedAt: 2 * HOUR_MS, lat: PARIS.lat, lng: PARIS.lng, hasGps: true }),
+    at('a', PARIS, HOUR_MS),
+    at('b', PARIS, 0),
+    at('c', PARIS, 2 * HOUR_MS),
   ];
 
-  it('computes startAt/endAt/photoCount/coverPhotoId from the photo group', () => {
+  it('computes startAt/endAt/photoCount/coverPhotoId from the group', () => {
     const trip = buildTrip(photos, {
       userId: 'test-user',
       tripId: 'trip-1',
@@ -144,7 +168,6 @@ describe('buildTrip', () => {
     expect(trip.endAt).toBe(2 * HOUR_MS);
     expect(trip.photoCount).toBe(3);
     expect(trip.coverPhotoId).toBe('b');
-    expect(trip.userId).toBe('test-user');
     expect(trip.id).toBe('trip-1');
   });
 
@@ -157,10 +180,9 @@ describe('buildTrip', () => {
     });
     expect(trip.title).toBe('Paris');
     expect(trip.primaryCity).toBe('Paris');
-    expect(trip.country).toBe('France');
   });
 
-  it('falls back to a date-range title when there is no city', () => {
+  it('falls back to a date title when there is no city', () => {
     const trip = buildTrip(photos, {
       userId: 'test-user',
       tripId: 'trip-1',

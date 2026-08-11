@@ -1,4 +1,3 @@
-import { useRouter } from 'expo-router';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
@@ -27,8 +26,9 @@ const PROVIDER_LABEL: Record<string, string> = {
   phone: 'via mobile',
 };
 
-export default function ProfileScreen() {
-  const router = useRouter();
+type Props = { onNext: () => void };
+
+export default function ProfileStep({ onNext }: Props) {
   const theme = useTheme();
   const profile = useDraftProfile();
 
@@ -87,7 +87,7 @@ export default function ProfileScreen() {
           </Field>
         </View>
 
-        <PrimaryButton label="Let's go" onPress={() => router.push('/permissions')} />
+        <PrimaryButton label="Let's go" onPress={onNext} />
       </ScrollView>
     </PhoneFrame>
   );

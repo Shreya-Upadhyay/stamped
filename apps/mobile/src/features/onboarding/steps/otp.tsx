@@ -1,4 +1,3 @@
-import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
@@ -12,8 +11,9 @@ import { Spacing } from '@/constants/theme';
 const CODE_LENGTH = 6;
 const RESEND_SECONDS = 42;
 
-export default function OtpScreen() {
-  const router = useRouter();
+type Props = { onVerified: () => void };
+
+export default function OtpStep({ onVerified }: Props) {
   const [code, setCode] = useState('');
   const [secondsLeft, setSecondsLeft] = useState(RESEND_SECONDS);
 
@@ -53,7 +53,7 @@ export default function OtpScreen() {
         <PrimaryButton
           label={complete ? 'Verify & continue' : 'Waiting for code…'}
           disabled={!complete}
-          onPress={() => router.push('/profile')}
+          onPress={onVerified}
         />
 
         <View style={styles.resendRow}>

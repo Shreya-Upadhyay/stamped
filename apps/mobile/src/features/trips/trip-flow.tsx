@@ -412,10 +412,27 @@ export function TripFlow({ source }: { source: PhotoSource }) {
           on your device — nothing is uploaded.
         </InfoStrip>
 
+        {/*
+          Limited access looks exactly like an empty library from in here, so
+          say so plainly and offer the way out rather than leaving the user
+          staring at photos that "should" be there.
+        */}
+        {source.permission?.accessPrivileges === 'limited' && (
+          <InfoStrip>
+            <ThemedText type="small">
+              Only the photos you specifically shared are visible to Stamped
+              {candidates ? ` (${candidates.length})` : ''}. Tap below to share more.
+            </ThemedText>
+          </InfoStrip>
+        )}
+        {source.permission?.accessPrivileges === 'limited' && source.presentPicker && (
+          <GhostButton label="Select more photos" onPress={source.presentPicker} />
+        )}
+
         {candidates && candidates.length > 0 && (
           <>
             <View style={styles.selectAllRow}>
-              <SectionLabel>{`${candidates.length} photos`}</SectionLabel>
+              <SectionLabel>{`${candidates.length} photos visible`}</SectionLabel>
               <GhostButton label="Select all" onPress={selectAll} style={styles.selectAll} />
             </View>
             <View style={styles.grid}>

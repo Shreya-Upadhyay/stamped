@@ -246,15 +246,25 @@ One UI, two data sources. That's why the whole experience is reviewable in a bro
 
 ## How trips are grouped
 
-Photos are sorted by time; a **new trip starts** when, versus the previous photo:
+Photos are sorted by capture time. A trip has a **centre** — the running average of the
+located photos in it — and continues while photos stay within **500 km** of that centre.
+The first photo beyond the radius starts a new trip.
 
-- more than **24 hours** have passed, **or**
-- the location is more than **300 km** away (only checked when both photos have GPS)
+Measuring from the trip's centre rather than the previous photo matters: consecutive-photo
+distance lets a slow drift chain across a continent, because each individual hop stays
+under the threshold.
 
-A photo without GPS can only trigger the time rule, never the distance rule. Thresholds are
-options on `segmentPhotosIntoTrips`, not hardcoded. The reasoning — including why this
-doesn't anchor to a "home city" the way `docs/ROADMAP.md` originally sketched — is in
-`docs/adr/0001-on-device-trip-clustering.md`.
+Two deliberate behaviours:
+
+- **Nothing splits on time by default.** A trip runs until the camera actually moves. The
+  side effect is that photos from the same place years apart merge into one trip — most
+  visibly, everyday photos at home. Excluding a home radius is the planned fix (it's why
+  onboarding collects a home city); `tripGapMs` is available meanwhile.
+- **Photos without GPS join the trip in progress and never move its centre**, so a
+  screenshot between two distant places can't bridge them into one trip.
+
+`tripRadiusKm` and `tripGapMs` are options on `segmentPhotosIntoTrips`, not constants.
+Full reasoning in `docs/adr/0001-on-device-trip-clustering.md`.
 
 ---
 

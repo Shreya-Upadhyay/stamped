@@ -1,4 +1,3 @@
-import { useRouter } from 'expo-router';
 import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
@@ -6,7 +5,7 @@ import { PrimaryButton } from '@/components/ui/buttons';
 import { Divider, Field, LogoHeader, SocialButton } from '@/components/ui/onboarding';
 import { PhoneFrame } from '@/components/ui/phone-frame';
 import { Spacing } from '@/constants/theme';
-import { useSession, type AuthProvider } from '@/features/auth/session';
+import type { AuthProvider } from '@/features/auth/session';
 
 const MOCK_PHONE = '🇮🇳 +91 98765 43210';
 
@@ -18,14 +17,15 @@ function greeting(): string {
   return 'Good evening';
 }
 
-export default function SignInScreen() {
-  const router = useRouter();
-  const { signInWith } = useSession();
+type Props = {
+  onProvider: (provider: AuthProvider) => void;
+  onPhone: () => void;
+  onSignUp: () => void;
+};
 
-  const chooseProvider = (provider: AuthProvider) => {
-    signInWith(provider);
-    router.push('/profile');
-  };
+export default function SignInStep({ onProvider, onPhone, onSignUp }: Props) {
+
+
 
   return (
     <PhoneFrame>
@@ -41,16 +41,16 @@ export default function SignInScreen() {
           </ThemedText>
         </View>
 
-        <SocialButton icon="🅖" label="Continue with Google" onPress={() => chooseProvider('google')} />
+        <SocialButton icon="🅖" label="Continue with Google" onPress={() => onProvider('google')} />
         <SocialButton
           icon="📷"
           label="Continue with Instagram"
-          onPress={() => chooseProvider('instagram')}
+          onPress={() => onProvider('instagram')}
         />
         <SocialButton
           icon="f"
           label="Continue with Facebook"
-          onPress={() => chooseProvider('facebook')}
+          onPress={() => onProvider('facebook')}
         />
 
         <Divider label="or sign in with mobile OTP" />
@@ -63,10 +63,7 @@ export default function SignInScreen() {
           </View>
           <PrimaryButton
             label="Send OTP"
-            onPress={() => {
-              signInWith('phone');
-              router.push('/otp');
-            }}
+            onPress={onPhone}
           />
         </View>
 
@@ -74,7 +71,7 @@ export default function SignInScreen() {
           <ThemedText type="small" themeColor="textSecondary">
             New to Stamped?{' '}
           </ThemedText>
-          <Pressable onPress={() => router.replace('/signup')}>
+          <Pressable onPress={onSignUp}>
             <ThemedText type="smallBold" themeColor="brand">
               Create account
             </ThemedText>

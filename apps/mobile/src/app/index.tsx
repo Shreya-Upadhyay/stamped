@@ -44,7 +44,7 @@ export default function HomeScreen() {
 
         <PrimaryButton
           label="Find my trips"
-          onPress={() => router.push('/(tabs)/photo-gps')}
+          onPress={() => router.push('/photo-gps')}
           style={styles.cta}
         />
 
