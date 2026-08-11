@@ -40,11 +40,25 @@ export type TripDetails = {
  * modules, which is how it gets developed and reviewed.
  */
 export type PhotoSource = {
-  /** Null while the permission state is still being determined. */
-  permission: { granted: boolean; canAskAgain: boolean } | null;
+  /**
+   * Null while the permission state is still being determined.
+   *
+   * `accessPrivileges` is 'limited' when the OS granted access to only a
+   * hand-picked subset of the library (Android 14+ / iOS 14+). That looks
+   * identical to "no photos found" from inside the app, so it has to be
+   * surfaced — otherwise a user whose photos are right there sees an empty
+   * grid with no explanation.
+   */
+  permission: {
+    granted: boolean;
+    canAskAgain: boolean;
+    accessPrivileges?: 'all' | 'limited' | 'none';
+  } | null;
   requestPermission: () => void;
   /** Opens system settings, when permission was permanently denied. */
   openSettings: () => void;
+  /** Re-opens the OS picker so more photos can be shared with the app. */
+  presentPicker?: () => void;
   loadCandidates: () => Promise<CandidatePhoto[]>;
   readMeta: (
     ids: string[],

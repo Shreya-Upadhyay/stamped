@@ -7,8 +7,32 @@ import { Linking } from 'react-native';
 import { TripFlow } from '@/features/trips/trip-flow';
 import type { CandidatePhoto, PhotoResult, PhotoSource } from '@/features/trips/types';
 
-const CANDIDATE_LIMIT = 60;
+const CANDIDATE_LIMIT = 200;
 const LOCAL_USER_ID = 'local-device-user';
+
+/**
+ * EXIF stores capture time as "YYYY:MM:DD HH:MM:SS" (colons in the date, and
+ * no timezone). `Date.parse` doesn't accept that, so convert it by hand and
+ * treat it as local time — which is what the camera meant.
+ */
+function parseExifDate(value: unknown): number | null {
+  if (typeof value !== 'string') return null;
+  const match = value.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+  if (!match) return null;
+  const [, year, month, day, hour, minute, second] = match.map(Number);
+  const ms = new Date(year, month - 1, day, hour, minute, second).getTime();
+  return Number.isFinite(ms) ? ms : null;
+}
+
+/** Pulls capture time out of whichever EXIF tag the file happens to carry. */
+function exifCapturedAt(exif: Record<string, unknown> | null): number | null {
+  if (!exif) return null;
+  for (const key of ['DateTimeOriginal', 'DateTimeDigitized', 'DateTime']) {
+    const parsed = parseExifDate(exif[key]);
+    if (parsed !== null) return parsed;
+  }
+  return null;
+}
 
 /**
  * Native photo source: reads real GPS + timestamps via expo-media-library.
@@ -27,6 +51,9 @@ export default function PhotoGpsScreen() {
   const assetsById = useMemo(() => new Map<string, MediaLibrary.Asset>(), []);
 
   const loadCandidates = useCallback(async (): Promise<CandidatePhoto[]> => {
+    // Newest first by capture time — what a photo picker should show. Photos
+    // missing DATE_TAKEN sort to the end rather than disappearing, since the
+    // limit is generous.
     const assets = await new MediaLibrary.Query()
       .eq(MediaLibrary.AssetField.MEDIA_TYPE, MediaLibrary.MediaType.IMAGE)
       .orderBy({ key: MediaLibrary.AssetField.CREATION_TIME, ascending: false })
@@ -61,12 +88,24 @@ export default function PhotoGpsScreen() {
           asset.getUri(),
         ]);
 
-        // Creation time comes from MediaStore's DATE_TAKEN, which is only
-        // populated when the scanner parsed an EXIF DateTimeOriginal. Plenty
-        // of real photos (and anything side-loaded) have no DATE_TAKEN at
-        // all, and falling through to 0 would date them to 1970 and collapse
-        // every time-gap check. Modification time is the next-best signal.
-        const capturedAt = creationTime ?? modificationTime ?? 0;
+        // MediaStore only fills DATE_TAKEN when its scanner parsed the file's
+        // EXIF, and it routinely skips that for anything copied onto the
+        // device rather than shot by its camera. So when it's missing, read
+        // the photo's own EXIF instead of trusting the index — the capture
+        // date is right there in the file. Order matters: EXIF beats file
+        // modification time, which for a copied file is just when it landed.
+        let capturedAt = creationTime ?? null;
+        let exif: Record<string, unknown> | null = null;
+
+        if (capturedAt === null) {
+          try {
+            exif = (await asset.getExif()) as Record<string, unknown>;
+            capturedAt = exifCapturedAt(exif);
+          } catch {
+            // Unreadable EXIF is not fatal — fall through to the file's mtime.
+          }
+        }
+        capturedAt = capturedAt ?? modificationTime ?? 0;
 
         const meta: PhotoMeta = {
           id: asset.id,
@@ -103,13 +142,23 @@ export default function PhotoGpsScreen() {
   const source: PhotoSource = useMemo(
     () => ({
       permission: permissionResponse
-        ? { granted: permissionResponse.granted, canAskAgain: permissionResponse.canAskAgain }
+        ? {
+            granted: permissionResponse.granted,
+            canAskAgain: permissionResponse.canAskAgain,
+            accessPrivileges: permissionResponse.accessPrivileges,
+          }
         : null,
       requestPermission: () => {
         requestPermission();
       },
       openSettings: () => {
         Linking.openSettings();
+      },
+      presentPicker: () => {
+        // No-ops unless access is actually limited, so it's safe to always offer.
+        MediaLibrary.presentPermissionsPicker(['photo']).catch(() => {
+          // Unsupported on this OS version — the settings route still works.
+        });
       },
       loadCandidates,
       readMeta,
