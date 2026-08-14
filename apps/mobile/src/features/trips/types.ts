@@ -1,4 +1,15 @@
-import type { LatLng, PhotoMeta, Trip } from '@stamped/shared';
+import type { LatLng, PhotoMeta, Trip, TripStop } from '@stamped/shared';
+
+/**
+ * What reverse geocoding returned for a point. `name` is the placemark —
+ * "Neuschwanstein Castle" — which the OS geocoder supplies free and offline;
+ * no Places API involved (see CLAUDE.md: on-device geocoding only).
+ */
+export type Place = {
+  name: string | null;
+  city: string | null;
+  country: string | null;
+};
 
 /** A photo offered to the user for selection, before any GPS is read. */
 export type CandidatePhoto = {
@@ -21,10 +32,17 @@ export type PhotoResult = {
   color?: string;
 };
 
-/** A clustered trip plus the photos that belong to it. */
+/** One stop in a trip, with the photos taken there. */
+export type StopGroup = {
+  stop: TripStop;
+  photos: PhotoResult[];
+};
+
+/** A clustered trip plus its photos and its itinerary of stops. */
 export type TripGroup = {
   trip: Trip;
   photos: PhotoResult[];
+  stops: StopGroup[];
 };
 
 /** User-supplied details captured on the validate step. */
@@ -64,5 +82,5 @@ export type PhotoSource = {
     ids: string[],
     onProgress: (completed: number, total: number) => void,
   ) => Promise<PhotoResult[]>;
-  reverseGeocode: (point: LatLng) => Promise<{ city: string | null; country: string | null }>;
+  reverseGeocode: (point: LatLng) => Promise<Place>;
 };

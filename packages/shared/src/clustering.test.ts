@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildTrip, computeCentroid, haversineDistanceKm, segmentPhotosIntoTrips } from './clustering';
+import {
+  buildTrip,
+  computeCentroid,
+  formatTripDateRange,
+  haversineDistanceKm,
+  segmentPhotosIntoTrips,
+} from './clustering';
 import type { PhotoMeta } from './types/photo';
 
 const HOUR_MS = 60 * 60 * 1000;
@@ -171,15 +177,26 @@ describe('buildTrip', () => {
     expect(trip.id).toBe('trip-1');
   });
 
-  it('uses the city as the title when available', () => {
+  it('titles the trip by country, keeping the city alongside', () => {
     const trip = buildTrip(photos, {
       userId: 'test-user',
       tripId: 'trip-1',
       city: 'Paris',
       country: 'France',
     });
-    expect(trip.title).toBe('Paris');
+    expect(trip.title).toBe('France');
     expect(trip.primaryCity).toBe('Paris');
+    expect(trip.country).toBe('France');
+  });
+
+  it('falls back to the city when the country is unknown', () => {
+    const trip = buildTrip(photos, {
+      userId: 'test-user',
+      tripId: 'trip-1',
+      city: 'Paris',
+      country: null,
+    });
+    expect(trip.title).toBe('Paris');
   });
 
   it('falls back to a date title when there is no city', () => {
@@ -191,5 +208,42 @@ describe('buildTrip', () => {
     });
     expect(trip.title).toContain('Trip');
     expect(trip.primaryCity).toBeNull();
+  });
+
+  it('spans start to end in the fallback title, not just the start date', () => {
+    const spanning = [at('a', PARIS, 0), at('b', PARIS, 5 * DAY_MS)];
+    const trip = buildTrip(spanning, {
+      userId: 'test-user',
+      tripId: 'trip-1',
+      city: null,
+      country: null,
+    });
+    // A five-day trip labelled with one date reads as a single day.
+    expect(trip.title).toBe(`Trip — ${formatTripDateRange(0, 5 * DAY_MS)}`);
+    expect(trip.title).toContain('–');
+  });
+});
+
+describe('formatTripDateRange', () => {
+  // Built as local dates, not epoch offsets: epoch 0 lands on a different
+  // calendar day either side of UTC, which makes "same day" untestable.
+  const morning = new Date(2026, 5, 1, 9, 0).getTime();
+  const evening = new Date(2026, 5, 1, 20, 0).getTime();
+  const later = new Date(2026, 5, 5, 12, 0).getTime();
+
+  it('collapses a same-day range to one date', () => {
+    expect(formatTripDateRange(morning, evening)).not.toContain('–');
+  });
+
+  it('shows both ends when the trip spans days', () => {
+    expect(formatTripDateRange(morning, later)).toContain('–');
+  });
+
+  it('names both years when the trip crosses New Year', () => {
+    const nye = new Date(2026, 11, 31, 18, 0).getTime();
+    const nyd = new Date(2027, 0, 1, 11, 0).getTime();
+    const range = formatTripDateRange(nye, nyd);
+    expect(range).toContain('2026');
+    expect(range).toContain('2027');
   });
 });

@@ -5,6 +5,7 @@ import { StyleSheet, useColorScheme, View } from 'react-native';
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import AppTabs from '@/components/app-tabs';
 import { SessionProvider, useSession } from '@/features/auth/session';
+import { TripArchiveProvider } from '@/features/trips/archive';
 import { OnboardingFlow } from '@/features/onboarding/onboarding-flow';
 
 SplashScreen.preventAutoHideAsync();
@@ -38,11 +39,13 @@ export default function RootLayout() {
 
   return (
     <SessionProvider>
+      <TripArchiveProvider>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <AnimatedSplashOverlay />
         <AppTabs />
         <OnboardingGate />
       </ThemeProvider>
+      </TripArchiveProvider>
     </SessionProvider>
   );
 }

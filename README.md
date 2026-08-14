@@ -34,14 +34,16 @@ The app runs end to end from first launch through to grouped trips.
 |---|---|---|
 | 1 | **Select photos** | Requests media-library permission, lists your camera roll, multi-select |
 | 2 | **Reading photos** | Live progress while GPS + timestamp are read from each photo |
-| 3 | **We found your trips** | Photos clustered into trips, reverse-geocoded to a city, thumbnails per trip |
+| 3 | **We found your trips** | Photos clustered into trips, each titled by country, thumbnails per trip |
 | 4 | **Add trip details** | Edit the trip name, see auto-detected dates, pick a category |
-| 5 | **Trips stamped** | Passport-stamp summary of each trip |
+| 5 | **Where you went** | Itinerary of stops by day, each with a suggested place name to approve |
+| 6 | **Trips stamped** | Passport-stamp summary of each trip |
 
 Also done:
 
-- **Shared data contract** — `PhotoMeta` and `Trip` types with doc comments (`packages/shared`)
-- **Clustering algorithm** — pure, dependency-free, **15 unit tests** (`packages/shared/src/clustering.ts`)
+- **Shared data contract** — `PhotoMeta`, `Trip` and `TripStop` types with doc comments (`packages/shared`)
+- **Clustering + itinerary logic** — pure, dependency-free, **33 unit tests**
+  (`packages/shared/src/clustering.ts`, `itinerary.ts`)
 - **Design system** — the warm brown/cream/gold Stamped look, light + dark mode
 - **Handles photos with no GPS** as a first-class case, not a crash
 
@@ -268,6 +270,27 @@ Full reasoning in `docs/adr/0001-on-device-trip-clustering.md`.
 
 ---
 
+## How places are named
+
+Each trip is then split into **stops** — the places actually visited — by the same
+centroid sweep at a much smaller scale: **1 km** radius, and a **3 hour** pause ends a
+stop even without moving. The itinerary screen lists them by day, in order.
+
+Names are **suggested, never assumed**. Each stop is reverse-geocoded once (not once per
+photo) via `expo-location`, which returns the OS placemark — "Eiffel Tower" — free,
+offline-capable, and with no API key. The app falls back `name → street → district → city`
+when the placemark is just a street number. Every suggestion appears in an editable field
+with an **Approve** button; a stop whose photos all lack GPS asks you to name it instead
+of guessing.
+
+The trip's own country and city are the **most common** values across its stops, so one
+odd stop can't rename the whole trip.
+
+`stopRadiusKm` and `stopGapMs` are options on `segmentTripIntoStops`. Full reasoning in
+`docs/adr/0002-itinerary-stops-and-place-names.md`.
+
+---
+
 ## Adding real auth later
 
 Everything an auth backend would provide sits behind one interface,
@@ -291,9 +314,17 @@ Worth knowing before you start that work:
 ## Known limitations
 
 - **iPhone testing is blocked** without an Apple Developer account or a Mac (above).
-- **City names don't appear on the Android emulator.** `reverseGeocodeAsync` needs Google's
-  geocoder backend, which the emulator can't reach; trips fall back to date-based titles.
-  Works on a real device with network, and on web.
+- **Place lookup needs location permission, and the app asks for it mid-flow.**
+  `reverseGeocodeAsync` is a pure coordinate→address call that never reads the device's
+  own position, but Android gates it behind `ACCESS_COARSE/FINE_LOCATION` anyway — without
+  it the native call rejects with *"Not authorized to use location services"*. The prompt
+  therefore appears during trip detection rather than during onboarding. Declining is
+  handled: stops come through unnamed, the itinerary explains why, and every stop can be
+  named by hand.
+- **Placemark quality varies.** Geocoders return a Plus Code (`HP3W+C7`) or a bare house
+  number (`1`) as the placemark when they have nothing better; `pickPlaceName` filters
+  those out and falls back to street → district → city. What's left is still uneven —
+  landmarks resolve well in towns, remote coordinates often give only a road.
 - **Trips are not saved.** They live in screen state only; leaving the screen loses them.
   Persistence is a later milestone.
 - **Sign-in is presentational** — see *Adding real auth* above.

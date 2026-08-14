@@ -122,6 +122,28 @@ export interface BuildTripParams {
   country: string | null;
 }
 
+/**
+ * "30 May – 4 Jun 2026", collapsing to a single date for a same-day trip.
+ *
+ * Lives here rather than in the app because the fallback trip title is built
+ * from it, and a title and its date line must not disagree.
+ */
+export function formatTripDateRange(startAt: number, endAt: number): string {
+  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
+  const startDate = new Date(startAt);
+  const endDate = new Date(endAt);
+  const start = startDate.toLocaleDateString(undefined, opts);
+  const end = endDate.toLocaleDateString(undefined, opts);
+  const startYear = startDate.getFullYear();
+  const endYear = endDate.getFullYear();
+
+  if (start === end && startYear === endYear) return `${start} ${startYear}`;
+  // A trip over New Year needs both years, or "31 Dec – 1 Jan 2027" reads as
+  // a single impossible day.
+  if (startYear !== endYear) return `${start} ${startYear} – ${end} ${endYear}`;
+  return `${start} – ${end} ${endYear}`;
+}
+
 /** Builds a Trip record from an already-segmented, non-empty group of photos. */
 export function buildTrip(photos: PhotoMeta[], params: BuildTripParams): Trip {
   const sorted = [...photos].sort((a, b) => a.capturedAt - b.capturedAt);
@@ -131,7 +153,11 @@ export function buildTrip(photos: PhotoMeta[], params: BuildTripParams): Trip {
   return {
     id: params.tripId,
     userId: params.userId,
-    title: params.city ?? `Trip — ${new Date(startAt).toLocaleDateString()}`,
+    // Country first: a trip is "Germany", not the one city the centroid
+    // happened to land in. City is the fallback when the country is unknown;
+    // failing that, the full span — a single date would misread a week-long
+    // trip as a day out.
+    title: params.country ?? params.city ?? `Trip — ${formatTripDateRange(startAt, endAt)}`,
     startAt,
     endAt,
     primaryCity: params.city,

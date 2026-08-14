@@ -1,11 +1,11 @@
-import type { LatLng, PhotoMeta } from '@stamped/shared';
+import { pickPlaceName, type LatLng, type PhotoMeta } from '@stamped/shared';
 import * as Location from 'expo-location';
 import * as MediaLibrary from 'expo-media-library';
-import { useCallback, useMemo } from 'react';
+import { useCallback, useMemo, useRef } from 'react';
 import { Linking } from 'react-native';
 
-import { TripFlow } from '@/features/trips/trip-flow';
-import type { CandidatePhoto, PhotoResult, PhotoSource } from '@/features/trips/types';
+import { TripsExperience } from '@/features/trips/trips-experience';
+import type { CandidatePhoto, Place, PhotoResult, PhotoSource } from '@/features/trips/types';
 
 const CANDIDATE_LIMIT = 200;
 const LOCAL_USER_ID = 'local-device-user';
@@ -49,6 +49,21 @@ export default function PhotoGpsScreen() {
 
   // Keep asset handles around so readMeta can call methods on them later.
   const assetsById = useMemo(() => new Map<string, MediaLibrary.Asset>(), []);
+
+  const locationRequest = useRef<Promise<boolean> | null>(null);
+
+  /**
+   * Asks for location permission at most once, however many stops need it.
+   *
+   * Stops are geocoded concurrently, so caching the *promise* rather than the
+   * result is what keeps the OS from stacking up a prompt per stop.
+   */
+  const ensureLocationPermission = useCallback((): Promise<boolean> => {
+    locationRequest.current ??= Location.requestForegroundPermissionsAsync()
+      .then((response) => response.granted)
+      .catch(() => false);
+    return locationRequest.current;
+  }, []);
 
   const loadCandidates = useCallback(async (): Promise<CandidatePhoto[]> => {
     // Newest first by capture time — what a photo picker should show. Photos
@@ -131,13 +146,37 @@ export default function PhotoGpsScreen() {
     [assetsById],
   );
 
-  const reverseGeocode = useCallback(async (point: LatLng) => {
-    const [address] = await Location.reverseGeocodeAsync({
-      latitude: point.lat,
-      longitude: point.lng,
-    });
-    return { city: address?.city ?? null, country: address?.country ?? null };
-  }, []);
+  const reverseGeocode = useCallback(
+    async (point: LatLng): Promise<Place> => {
+      // Android gates the geocoder behind location permission even though this
+      // is a pure coordinate→address lookup that never reads where the device
+      // actually is. Without it the native call rejects with "Not authorized
+      // to use location services" and every stop comes back unnamed.
+      if (!(await ensureLocationPermission())) {
+        throw new Error('Location permission is needed to look up place names');
+      }
+
+      const [address] = await Location.reverseGeocodeAsync({
+        latitude: point.lat,
+        longitude: point.lng,
+      });
+
+      // The placemark is the best label when it's a real one, but Android
+      // substitutes a house number ("1") or a Plus Code ("HP3W+C7") when it
+      // has nothing — pickPlaceName skips those and falls back.
+      return {
+        name: pickPlaceName({
+          name: address?.name,
+          street: address?.street,
+          district: address?.district,
+          city: address?.city,
+        }),
+        city: address?.city ?? address?.subregion ?? null,
+        country: address?.country ?? null,
+      };
+    },
+    [ensureLocationPermission],
+  );
 
   const source: PhotoSource = useMemo(
     () => ({
@@ -167,5 +206,5 @@ export default function PhotoGpsScreen() {
     [permissionResponse, requestPermission, loadCandidates, readMeta, reverseGeocode],
   );
 
-  return <TripFlow source={source} />;
+  return <TripsExperience source={source} />;
 }
