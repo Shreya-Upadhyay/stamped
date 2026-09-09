@@ -7,7 +7,14 @@ import { Linking } from 'react-native';
 import { TripsExperience } from '@/features/trips/trips-experience';
 import type { CandidatePhoto, Place, PhotoResult, PhotoSource } from '@/features/trips/types';
 
-const CANDIDATE_LIMIT = 200;
+/**
+ * How many photos the picker offers, newest first.
+ *
+ * Sized for testing clustering against a real camera roll rather than a
+ * handful of samples — a couple of hundred photos rarely spans more than one
+ * or two trips.
+ */
+const CANDIDATE_LIMIT = 500;
 const LOCAL_USER_ID = 'local-device-user';
 
 /**

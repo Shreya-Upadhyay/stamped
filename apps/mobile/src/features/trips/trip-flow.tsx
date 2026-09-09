@@ -3,6 +3,7 @@ import {
   buildTrip,
   dominantValue,
   formatTripDateRange,
+  mapWithLimit,
   segmentPhotosIntoTrips,
   segmentTripIntoStops,
 } from '@stamped/shared';
@@ -34,6 +35,17 @@ import type {
 const LOCAL_USER_ID = 'local-device-user';
 
 const CATEGORIES = ['Couple', 'Solo', 'Family', 'Group', 'Business', 'Other'];
+
+/**
+ * How many place lookups to run at once.
+ *
+ * The device geocoder throttles when hit with hundreds of concurrent
+ * lookups, and a throttled lookup fails exactly like a missing permission —
+ * every stop comes back unnamed, which is very hard to tell apart. A small
+ * bound keeps a big library reliable while staying far quicker than going
+ * strictly one at a time.
+ */
+const GEOCODE_CONCURRENCY = 4;
 
 type Step = 'select' | 'reading' | 'trips' | 'validate' | 'itinerary' | 'done';
 
@@ -95,6 +107,8 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState({ completed: 0, total: 0 });
+  /** Which slow pass the progress bar is currently reporting on. */
+  const [phase, setPhase] = useState<'reading' | 'placing'>('reading');
   const [tripGroups, setTripGroups] = useState<TripGroup[]>([]);
   const [details, setDetails] = useState<Record<string, TripDetails>>({});
   const [editingTripId, setEditingTripId] = useState<string | null>(null);
@@ -145,6 +159,7 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
     if (ids.length === 0) return;
 
     setStep('reading');
+    setPhase('reading');
     setProgress({ completed: 0, total: ids.length });
     setGeocodeDiagnosis(null);
 
@@ -159,58 +174,69 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
     const groups = segmentPhotosIntoTrips(results.map((r) => r.meta));
     const byAssetId = new Map(results.map((r) => [r.meta.assetId, r]));
 
-    const built = await Promise.all(
-      groups.map(async (group, index): Promise<TripGroup> => {
-        const tripId = `${LOCAL_USER_ID}-trip-${group[0].capturedAt}-${index}`;
+    // Segment first, geocode second. Splitting the phases means every lookup
+    // can be counted before any of them runs, so the place-naming pass gets a
+    // real progress bar instead of looking frozen on a big library.
+    const skeleton = groups.map((group, index) => {
+      const tripId = `${LOCAL_USER_ID}-trip-${group[0].capturedAt}-${index}`;
+      const stopGroups: StopGroup[] = segmentTripIntoStops(group).map((stopPhotos, stopIndex) => ({
+        stop: buildStop(stopPhotos, {
+          tripId,
+          stopId: `${tripId}-stop-${stopIndex}`,
+          order: stopIndex,
+        }),
+        photos: stopPhotos
+          .map((photo) => byAssetId.get(photo.assetId))
+          .filter((r): r is PhotoResult => r != null),
+      }));
+      return { group, tripId, stopGroups };
+    });
 
-        // Geocode once per stop rather than once per photo: a place visited
-        // is what the itinerary lists, and the OS geocoder is slow enough
-        // that the difference is very noticeable on a real trip.
-        const stops: StopGroup[] = await Promise.all(
-          segmentTripIntoStops(group).map(async (stopPhotos, stopIndex) => {
-            const stop = buildStop(stopPhotos, {
-              tripId,
-              stopId: `${tripId}-stop-${stopIndex}`,
-              order: stopIndex,
-            });
+    // Geocode once per stop rather than once per photo: a place visited is
+    // what the itinerary lists, and on a real trip that is the difference
+    // between tens of lookups and thousands.
+    const locatable = skeleton
+      .flatMap((entry) => entry.stopGroups)
+      .filter(({ stop }) => stop.lat != null && stop.lng != null);
 
-            if (stop.lat != null && stop.lng != null) {
-              try {
-                const place = await source.reverseGeocode({ lat: stop.lat, lng: stop.lng });
-                stop.suggestedName = place.name ?? place.city;
-                stop.city = place.city;
-                stop.country = place.country;
-                if (stop.suggestedName == null) {
-                  // The lookup succeeded but had nothing to say about this
-                  // point — distinct from it failing outright.
-                  diagnosis ??= 'the geocoder returned no match for these coordinates';
-                }
-              } catch (error) {
-                // Offline, or no working geocoder. Leave the stop unnamed so
-                // the user can type one, rather than failing the whole run —
-                // but keep why, so the UI isn't left guessing.
-                diagnosis ??= error instanceof Error ? error.message : String(error);
-              }
-            }
+    setPhase('placing');
+    setProgress({ completed: 0, total: locatable.length });
 
-            return {
-              stop,
-              photos: stopPhotos
-                .map((p) => byAssetId.get(p.assetId))
-                .filter((r): r is PhotoResult => r != null),
-            };
-          }),
-        );
+    let placed = 0;
+    await mapWithLimit(locatable, GEOCODE_CONCURRENCY, async ({ stop }) => {
+      try {
+        const place = await source.reverseGeocode({ lat: stop.lat!, lng: stop.lng! });
+        stop.suggestedName = place.name ?? place.city;
+        stop.city = place.city;
+        stop.country = place.country;
+        if (stop.suggestedName == null) {
+          // The lookup succeeded but had nothing to say about this point —
+          // distinct from it failing outright.
+          diagnosis ??= 'the geocoder returned no match for these coordinates';
+        }
+      } catch (error) {
+        // Offline, or no working geocoder. Leave the stop unnamed so the user
+        // can type one, rather than failing the whole run — but keep why, so
+        // the UI isn't left guessing.
+        diagnosis ??= error instanceof Error ? error.message : String(error);
+      }
+      placed += 1;
+      setProgress({ completed: placed, total: locatable.length });
+    });
 
-        // The trip takes its name from wherever most of it happened.
-        const country = dominantValue(stops.map((s) => s.stop.country));
-        const city = dominantValue(stops.map((s) => s.stop.city));
+    const built = skeleton.map(({ group, tripId, stopGroups }): TripGroup => {
+      // The trip takes its name from wherever most of it happened.
+      const country = dominantValue(stopGroups.map((s) => s.stop.country));
+      const city = dominantValue(stopGroups.map((s) => s.stop.city));
 
-        const trip = buildTrip(group, { userId: LOCAL_USER_ID, tripId, city, country });
-        const ids = new Set(group.map((p) => p.assetId));
-        return { trip, photos: results.filter((r) => ids.has(r.meta.assetId)), stops };
-      }),
-    );
+      const trip = buildTrip(group, { userId: LOCAL_USER_ID, tripId, city, country });
+      const ids = new Set(group.map((photo) => photo.assetId));
+      return {
+        trip,
+        photos: results.filter((r) => ids.has(r.meta.assetId)),
+        stops: stopGroups,
+      };
+    });
 
     setGeocodeDiagnosis(diagnosis);
     setTripGroups(built);
@@ -286,7 +312,10 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
     const pct = progress.total ? Math.round((progress.completed / progress.total) * 100) : 0;
     return (
       <PhoneFrame>
-        <ScreenHeader title="Reading photos" subtitle="finding where you were" />
+        <ScreenHeader
+          title={phase === 'reading' ? 'Reading photos' : 'Finding place names'}
+          subtitle={phase === 'reading' ? 'finding where you were' : 'naming each stop'}
+        />
         <StepProgress steps={3} current={STEP_INDEX.reading} />
         <ThemedView style={styles.centered}>
           <ThemedText type="title" themeColor="brand">
@@ -298,9 +327,15 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
             />
           </ThemedView>
           <ThemedText type="small" themeColor="textSecondary">
-            Reading photo {progress.completed} of {progress.total}
+            {phase === 'reading'
+              ? `Reading photo ${progress.completed} of ${progress.total}`
+              : `Naming stop ${progress.completed} of ${progress.total}`}
           </ThemedText>
-          <InfoStrip>Reading location and time from each photo, on your device.</InfoStrip>
+          <InfoStrip>
+            {phase === 'reading'
+              ? 'Reading location and time from each photo, on your device.'
+              : 'Looking up a name for each place you stopped, on your device.'}
+          </InfoStrip>
         </ThemedView>
       </PhoneFrame>
     );
