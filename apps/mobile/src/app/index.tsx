@@ -1,3 +1,4 @@
+import { formatTripDateRange } from '@stamped/shared';
 import { useRouter } from 'expo-router';
 import { ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -6,9 +7,11 @@ import { ThemedText } from '@/components/themed-text';
 import { ThemedView } from '@/components/themed-view';
 import { PrimaryButton } from '@/components/ui/buttons';
 import { PhoneFrame } from '@/components/ui/phone-frame';
-import { Card, InfoStrip, SectionLabel } from '@/components/ui/surfaces';
+import { Card, InfoStrip, Pill, SectionLabel } from '@/components/ui/surfaces';
 import { BottomTabInset, Radius, Spacing } from '@/constants/theme';
 import { useSession } from '@/features/auth/session';
+import { archiveSummary, useTripArchive } from '@/features/trips/archive';
+import { MoreTile, Thumb } from '@/features/trips/thumb';
 
 /** First name only — "Meera Rao" → "Meera". */
 function firstName(name: string): string {
@@ -19,6 +22,15 @@ export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { profile } = useSession();
+  const { trips, requestTrip } = useTripArchive();
+  const summary = archiveSummary(trips);
+  const hasTrips = trips.length > 0;
+
+  // Tapping a trip opens it in the Trips tab, which owns the detail screen.
+  const openTrip = (id: string) => {
+    requestTrip(id);
+    router.push('/photo-gps');
+  };
 
   return (
     <PhoneFrame>
@@ -27,7 +39,11 @@ export default function HomeScreen() {
           STAMPED
         </ThemedText>
         <ThemedText type="small" themeColor="accent" style={styles.headerSub}>
-          {profile ? `${firstName(profile.name)} · ${profile.homeCity}` : 'your travel archive'}
+          {hasTrips
+            ? `${summary.tripCount} stamped · ${summary.countries} ${summary.countries === 1 ? 'country' : 'countries'} · ${summary.photoCount} photos`
+            : profile
+              ? `${firstName(profile.name)} · ${profile.homeCity}`
+              : 'your travel archive'}
         </ThemedText>
       </ThemedView>
 
@@ -36,45 +52,93 @@ export default function HomeScreen() {
           styles.body,
           { paddingBottom: insets.bottom + BottomTabInset + Spacing.four },
         ]}>
-        <ThemedText type="heroTitle">Let&apos;s find your trips</ThemedText>
-        <ThemedText type="small" themeColor="textSecondary">
-          Stamped reads the time and place from photos already on your phone and groups them into
-          trips. Nothing is uploaded.
-        </ThemedText>
+        {hasTrips ? (
+          <>
+            <ThemedText type="heroTitle">Your travel archive</ThemedText>
+            <SectionLabel>Stamped trips</SectionLabel>
+            {trips.map((t) => (
+              <Card key={t.id} onPress={() => openTrip(t.id)}>
+                <View style={styles.tripHeader}>
+                  <View style={styles.tripHeaderText}>
+                    <ThemedText type="cardTitle">
+                      {t.details.title || t.group.trip.title}
+                    </ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {formatTripDateRange(t.group.trip.startAt, t.group.trip.endAt)} ·{' '}
+                      {t.group.trip.photoCount} photos · {t.group.stops.length} stops
+                    </ThemedText>
+                    {t.group.trip.primaryCity && (
+                      <ThemedText type="small" themeColor="textSecondary">
+                        📍 {t.group.trip.primaryCity}
+                        {t.group.trip.country ? `, ${t.group.trip.country}` : ''}
+                      </ThemedText>
+                    )}
+                  </View>
+                  <Pill label="✦ Stamped" tone="brand" />
+                </View>
+                <View style={styles.thumbRow}>
+                  {t.group.photos.slice(0, 4).map((p) => (
+                    <Thumb key={p.meta.assetId} photo={p} size={52} />
+                  ))}
+                  {t.group.photos.length > 4 && (
+                    <MoreTile count={t.group.photos.length - 4} size={52} />
+                  )}
+                </View>
+              </Card>
+            ))}
 
-        <PrimaryButton
-          label="Find my trips"
-          onPress={() => router.push('/photo-gps')}
-          style={styles.cta}
-        />
+            <PrimaryButton
+              label="Find more trips"
+              onPress={() => router.push('/photo-gps')}
+              style={styles.cta}
+            />
+            <InfoStrip>
+              These trips live only for the length of a session — saving to your account arrives
+              with the backend milestone.
+            </InfoStrip>
+          </>
+        ) : (
+          <>
+            <ThemedText type="heroTitle">Let&apos;s find your trips</ThemedText>
+            <ThemedText type="small" themeColor="textSecondary">
+              Stamped reads the time and place from photos already on your phone and groups them
+              into trips. Nothing is uploaded.
+            </ThemedText>
 
-        <SectionLabel>How it works</SectionLabel>
-        {[
-          { step: '1', title: 'Pick photos', body: 'Choose the photos you want grouped.' },
-          { step: '2', title: 'Read location', body: 'GPS and timestamps are read on-device.' },
-          { step: '3', title: 'Group into trips', body: 'Photos cluster by where and when.' },
-        ].map((item) => (
-          <Card key={item.step}>
-            <View style={styles.stepRow}>
-              <ThemedView type="accentLight" style={styles.stepBadge}>
-                <ThemedText type="smallBold" themeColor="brand">
-                  {item.step}
-                </ThemedText>
-              </ThemedView>
-              <View style={styles.stepText}>
-                <ThemedText type="smallBold">{item.title}</ThemedText>
-                <ThemedText type="small" themeColor="textSecondary">
-                  {item.body}
-                </ThemedText>
-              </View>
-            </View>
-          </Card>
-        ))}
+            <PrimaryButton
+              label="Find my trips"
+              onPress={() => router.push('/photo-gps')}
+              style={styles.cta}
+            />
 
-        <InfoStrip>
-          Saved trips, sharing and your archive arrive in a later milestone — right now trips live
-          only for the length of a session.
-        </InfoStrip>
+            <SectionLabel>How it works</SectionLabel>
+            {[
+              { step: '1', title: 'Pick photos', body: 'Choose the photos you want grouped.' },
+              { step: '2', title: 'Read location', body: 'GPS and timestamps are read on-device.' },
+              { step: '3', title: 'Group into trips', body: 'Photos cluster by where and when.' },
+            ].map((item) => (
+              <Card key={item.step}>
+                <View style={styles.stepRow}>
+                  <ThemedView type="accentLight" style={styles.stepBadge}>
+                    <ThemedText type="smallBold" themeColor="brand">
+                      {item.step}
+                    </ThemedText>
+                  </ThemedView>
+                  <View style={styles.stepText}>
+                    <ThemedText type="smallBold">{item.title}</ThemedText>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {item.body}
+                    </ThemedText>
+                  </View>
+                </View>
+              </Card>
+            ))}
+
+            <InfoStrip>
+              Stamped trips will collect here once you&apos;ve found some.
+            </InfoStrip>
+          </>
+        )}
       </ScrollView>
     </PhoneFrame>
   );
@@ -111,5 +175,20 @@ const styles = StyleSheet.create({
   stepText: {
     flex: 1,
     gap: Spacing.half,
+  },
+  tripHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: Spacing.two,
+  },
+  tripHeaderText: {
+    flex: 1,
+    gap: Spacing.half,
+  },
+  thumbRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+    flexWrap: 'wrap',
   },
 });

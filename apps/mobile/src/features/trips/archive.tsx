@@ -21,6 +21,16 @@ type TripArchive = {
   getTrip: (id: string) => StampedTrip | null;
   renameStop: (tripId: string, stopId: string, name: string) => void;
   clear: () => void;
+  /**
+   * A trip the Home tab asked the Trips tab to open.
+   *
+   * Home and the trip detail live in different tabs, and the detail is a mode
+   * inside the Trips tab's state machine rather than a route, so there's no
+   * URL to link to. Home parks an id here and the Trips tab picks it up.
+   */
+  pendingTripId: string | null;
+  requestTrip: (id: string) => void;
+  consumePendingTrip: () => void;
 };
 
 const TripArchiveContext = createContext<TripArchive | null>(null);
@@ -37,6 +47,7 @@ const TripArchiveContext = createContext<TripArchive | null>(null);
  */
 export function TripArchiveProvider({ children }: { children: ReactNode }) {
   const [trips, setTrips] = useState<StampedTrip[]>([]);
+  const [pendingTripId, setPendingTripId] = useState<string | null>(null);
 
   const stamp = useCallback(
     (
@@ -89,9 +100,21 @@ export function TripArchiveProvider({ children }: { children: ReactNode }) {
 
   const clear = useCallback(() => setTrips([]), []);
 
+  const requestTrip = useCallback((id: string) => setPendingTripId(id), []);
+  const consumePendingTrip = useCallback(() => setPendingTripId(null), []);
+
   const value = useMemo<TripArchive>(
-    () => ({ trips, stamp, getTrip, renameStop, clear }),
-    [trips, stamp, getTrip, renameStop, clear],
+    () => ({
+      trips,
+      stamp,
+      getTrip,
+      renameStop,
+      clear,
+      pendingTripId,
+      requestTrip,
+      consumePendingTrip,
+    }),
+    [trips, stamp, getTrip, renameStop, clear, pendingTripId, requestTrip, consumePendingTrip],
   );
 
   return <TripArchiveContext.Provider value={value}>{children}</TripArchiveContext.Provider>;

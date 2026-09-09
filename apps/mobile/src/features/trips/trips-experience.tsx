@@ -1,5 +1,6 @@
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 
+import { useTripArchive } from './archive';
 import { PastTripsScreen, TripHomeScreen, TripsHubScreen } from './archive-screens';
 import { TripFlow } from './trip-flow';
 import { TripItineraryScreen } from './trip-itinerary-screen';
@@ -26,6 +27,15 @@ type Mode =
 
 export function TripsExperience({ source }: { source: PhotoSource }) {
   const [mode, setMode] = useState<Mode>({ name: 'hub' });
+  const { pendingTripId, consumePendingTrip } = useTripArchive();
+
+  // Home lists stamped trips but can't render the detail itself — tapping one
+  // parks its id here and switches tab, and this picks it up.
+  useEffect(() => {
+    if (pendingTripId == null) return;
+    setMode({ name: 'trip', tripId: pendingTripId });
+    consumePendingTrip();
+  }, [pendingTripId, consumePendingTrip]);
 
   const toHub = useCallback(() => setMode({ name: 'hub' }), []);
   const toArchive = useCallback(() => setMode({ name: 'archive' }), []);

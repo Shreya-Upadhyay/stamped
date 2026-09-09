@@ -506,11 +506,14 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
             </View>
           ))}
 
-          <PrimaryButton
-            label="Done"
-            onPress={() => setStep(itineraryOrigin)}
-            style={styles.cta}
-          />
+          {/*
+            Always forward to the trip list — never back to `itineraryOrigin`.
+            Coming from the details step, returning there means its "Next"
+            button lands you straight back on the itinerary, and the two
+            screens bounce off each other with no way out. Only the header's
+            back arrow retraces where you came from.
+          */}
+          <PrimaryButton label="Done" onPress={() => setStep('trips')} style={styles.cta} />
         </ScrollView>
       </PhoneFrame>
     );
