@@ -4,7 +4,8 @@
   "main": "src/index.ts",
   "private": true,
   "scripts": {
-    "test": "vitest run"
+    "test": "vitest run",
+    "tune": "vitest run cluster-report --disable-console-intercept"
   },
   "devDependencies": {
     "vitest": "^4.1.10"
