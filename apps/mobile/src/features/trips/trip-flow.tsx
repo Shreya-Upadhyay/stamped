@@ -4,6 +4,9 @@ import {
   dominantValue,
   formatTripDateRange,
   mapWithLimit,
+  partitionHomePhotos,
+  partitionUnlocated,
+  placePhoto,
   segmentPhotosIntoTrips,
   segmentTripIntoStops,
 } from '@stamped/shared';
@@ -21,9 +24,12 @@ import { Card, Chip, InfoStrip, Pill, SectionLabel } from '@/components/ui/surfa
 import { BottomTabInset, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
+import { useSession } from '@/features/auth/session';
+
 import { useTripArchive } from './archive';
 import type {
   CandidatePhoto,
+  FoundPlace,
   PhotoResult,
   PhotoSource,
   StopGroup,
@@ -47,12 +53,13 @@ const CATEGORIES = ['Couple', 'Solo', 'Family', 'Group', 'Business', 'Other'];
  */
 const GEOCODE_CONCURRENCY = 4;
 
-type Step = 'select' | 'reading' | 'trips' | 'validate' | 'itinerary' | 'done';
+type Step = 'select' | 'reading' | 'locate' | 'trips' | 'validate' | 'itinerary' | 'done';
 
 /** Progress-bar position for each step of the flow. */
 const STEP_INDEX: Record<Step, number> = {
   select: 0,
   reading: 0,
+  locate: 0,
   trips: 1,
   validate: 1,
   itinerary: 1,
@@ -87,6 +94,16 @@ function Stat({ value, label }: { value: string; label: string }) {
   );
 }
 
+/** "Sat 30 May, 4:12 pm" for a photo's capture time. */
+function formatPhotoMoment(ms: number): string {
+  const date = new Date(ms).toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+  return `${date}, ${formatTime(ms)}`;
+}
+
 /** Square thumbnail; falls back to a solid tile when the source has no image. */
 function Thumb({ photo, size = 56 }: { photo: { uri: string | null; color?: string }; size?: number }) {
   const theme = useTheme();
@@ -101,6 +118,7 @@ function Thumb({ photo, size = 56 }: { photo: { uri: string | null; color?: stri
 export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () => void }) {
   const theme = useTheme();
   const { stamp } = useTripArchive();
+  const { homeBase } = useSession();
 
   const [step, setStep] = useState<Step>('select');
   const [candidates, setCandidates] = useState<CandidatePhoto[] | null>(null);
@@ -116,6 +134,10 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
   const [stopNames, setStopNames] = useState<Record<string, string>>({});
   /** Why place lookup produced nothing, when it produced nothing. */
   const [geocodeDiagnosis, setGeocodeDiagnosis] = useState<string | null>(null);
+  /** How many photos the last run skipped for being taken at home. */
+  const [homeSkipped, setHomeSkipped] = useState(0);
+  /** Whether the last run deliberately kept home photos in. */
+  const [keptHome, setKeptHome] = useState(false);
   /**
    * Which screen opened the itinerary, so its back button returns there.
    * It's reachable both from a trip card and from the details step; sending
@@ -128,6 +150,21 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
    * selected by default, which is what the prototype shows.
    */
   const [excludedTripIds, setExcludedTripIds] = useState<Set<string>>(new Set());
+  /** Screenshots are hidden from the picker unless asked for. */
+  const [showScreenshots, setShowScreenshots] = useState(false);
+  /**
+   * Located photos from the last read, kept so re-running with or without
+   * home photos doesn't re-read the library and discard manual placements.
+   */
+  const [readyResults, setReadyResults] = useState<PhotoResult[]>([]);
+  /** Selected photos that recorded no location, awaiting a place or a skip. */
+  const [unlocatedResults, setUnlocatedResults] = useState<PhotoResult[]>([]);
+  /** Where the user placed each un-located photo, keyed by asset id. */
+  const [placements, setPlacements] = useState<Record<string, FoundPlace>>({});
+  const [placeDrafts, setPlaceDrafts] = useState<Record<string, string>>({});
+  const [placeErrors, setPlaceErrors] = useState<Record<string, boolean>>({});
+  /** Un-located photos left unplaced and so dropped from the last run. */
+  const [unplacedSkipped, setUnplacedSkipped] = useState(0);
 
   const granted = source.permission?.granted ?? false;
 
@@ -149,30 +186,55 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
     });
   }, []);
 
+  const screenshotCount = useMemo(
+    () => (candidates ?? []).filter((c) => c.isScreenshot).length,
+    [candidates],
+  );
+  const visibleCandidates = useMemo(
+    () => (candidates ?? []).filter((c) => showScreenshots || !c.isScreenshot),
+    [candidates, showScreenshots],
+  );
+
+  const toggleScreenshots = useCallback(() => {
+    if (showScreenshots) {
+      // A photo shouldn't stay selected once it's hidden from view.
+      const hidden = new Set((candidates ?? []).filter((c) => c.isScreenshot).map((c) => c.id));
+      setSelectedIds((prev) => new Set([...prev].filter((id) => !hidden.has(id))));
+    }
+    setShowScreenshots(!showScreenshots);
+  }, [showScreenshots, candidates]);
+
   const selectAll = useCallback(() => {
-    setSelectedIds(new Set((candidates ?? []).map((c) => c.id)));
-  }, [candidates]);
+    setSelectedIds(new Set(visibleCandidates.map((c) => c.id)));
+  }, [visibleCandidates]);
 
-  /** Read metadata for the selection, then cluster + geocode into trips. */
-  const analyse = useCallback(async () => {
-    const ids = [...selectedIds];
-    if (ids.length === 0) return;
-
+  /**
+   * Clusters located photos into trips and names every stop. Every photo
+   * passed in must have coordinates: un-located ones are placed or dropped on
+   * the locate step before this runs.
+   */
+  const buildTrips = useCallback(
+    async (results: PhotoResult[], { includeHome = false }: { includeHome?: boolean } = {}) => {
+    setKeptHome(includeHome);
     setStep('reading');
-    setPhase('reading');
-    setProgress({ completed: 0, total: ids.length });
     setGeocodeDiagnosis(null);
 
     // First reason place lookup came back empty, kept so the itinerary can
     // explain itself instead of showing a screen of blank fields.
     let diagnosis: string | null = null;
 
-    const results = await source.readMeta(ids, (completed, total) =>
-      setProgress({ completed, total }),
-    );
-
-    const groups = segmentPhotosIntoTrips(results.map((r) => r.meta));
     const byAssetId = new Map(results.map((r) => [r.meta.assetId, r]));
+
+    // Drop photos taken around home before grouping. Without this, everyday
+    // life accumulates into one enormous trip spanning years — the flaw
+    // recorded in docs/adr/0001-on-device-trip-clustering.md.
+    const { away, atHome } = partitionHomePhotos(
+      results.map((r) => r.meta),
+      includeHome ? null : homeBase,
+    );
+    setHomeSkipped(atHome.length);
+
+    const groups = segmentPhotosIntoTrips(away);
 
     // Segment first, geocode second. Splitting the phases means every lookup
     // can be counted before any of them runs, so the place-naming pass gets a
@@ -244,7 +306,76 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
       Object.fromEntries(built.map((g) => [g.trip.id, { title: g.trip.title, category: 'Group' }])),
     );
     setStep('trips');
-  }, [selectedIds, source]);
+    },
+    [source, homeBase],
+  );
+
+  /**
+   * Reads the selection. Photos with coordinates go straight on; any that
+   * recorded none are held for the locate step, where the user can place them.
+   */
+  const analyse = useCallback(async () => {
+    const ids = [...selectedIds];
+    if (ids.length === 0) return;
+
+    setStep('reading');
+    setPhase('reading');
+    setProgress({ completed: 0, total: ids.length });
+
+    const results = await source.readMeta(ids, (completed, total) =>
+      setProgress({ completed, total }),
+    );
+
+    const { unlocated } = partitionUnlocated(results.map((r) => r.meta));
+    const unlocatedIds = new Set(unlocated.map((p) => p.assetId));
+    const located = results.filter((r) => !unlocatedIds.has(r.meta.assetId));
+
+    setReadyResults(located);
+    setUnplacedSkipped(0);
+
+    if (unlocatedIds.size > 0) {
+      setUnlocatedResults(results.filter((r) => unlocatedIds.has(r.meta.assetId)));
+      setPlacements({});
+      setPlaceDrafts({});
+      setPlaceErrors({});
+      setStep('locate');
+      return;
+    }
+    await buildTrips(located);
+  }, [selectedIds, source, buildTrips]);
+
+  const lookupPlace = useCallback(
+    async (assetId: string) => {
+      setPlaceErrors((errors) => ({ ...errors, [assetId]: false }));
+      const found = await source.findPlace(placeDrafts[assetId] ?? '');
+      if (found) setPlacements((current) => ({ ...current, [assetId]: found }));
+      else setPlaceErrors((errors) => ({ ...errors, [assetId]: true }));
+    },
+    [placeDrafts, source],
+  );
+
+  /** Applies one placement to every photo still waiting: the common case. */
+  const placeRemaining = useCallback(
+    (place: FoundPlace) => {
+      setPlacements((current) => {
+        const next = { ...current };
+        for (const r of unlocatedResults) next[r.meta.assetId] ??= place;
+        return next;
+      });
+    },
+    [unlocatedResults],
+  );
+
+  /** Keeps what the user placed, drops the rest, and clusters. */
+  const continueFromLocate = useCallback(() => {
+    const placed = unlocatedResults
+      .filter((r) => placements[r.meta.assetId])
+      .map((r) => ({ ...r, meta: placePhoto(r.meta, placements[r.meta.assetId]) }));
+    const all = [...readyResults, ...placed].sort((a, b) => a.meta.capturedAt - b.meta.capturedAt);
+    setReadyResults(all);
+    setUnplacedSkipped(unlocatedResults.length - placed.length);
+    void buildTrips(all);
+  }, [unlocatedResults, placements, readyResults, buildTrips]);
 
   const toggleTripIncluded = useCallback((tripId: string) => {
     setExcludedTripIds((previous) => {
@@ -263,6 +394,10 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
     setStopNames({});
     setGeocodeDiagnosis(null);
     setEditingTripId(null);
+    setReadyResults([]);
+    setUnlocatedResults([]);
+    setPlacements({});
+    setUnplacedSkipped(0);
     setStep('select');
   }, []);
 
@@ -555,6 +690,115 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
   }
 
   // ── Step: detected trips ───────────────────────────────────────────
+  // ── Step: place photos that recorded no location ──────────────────
+  if (step === 'locate') {
+    const placedCount = unlocatedResults.filter((r) => placements[r.meta.assetId]).length;
+    const remaining = unlocatedResults.length - placedCount;
+    const n = unlocatedResults.length;
+    return (
+      <PhoneFrame>
+        <ScreenHeader
+          title="Where were these?"
+          subtitle={`${n} photo${n === 1 ? '' : 's'} with no location`}
+          onBack={() => setStep('select')}
+        />
+        <StepProgress steps={3} current={STEP_INDEX.locate} />
+        <ScrollView contentContainerStyle={styles.body}>
+          <InfoStrip>
+            These didn&apos;t record where they were taken. Name a place to include one in your
+            trips. Anything left without a place is skipped.
+          </InfoStrip>
+
+          {unlocatedResults.map((r) => {
+            const id = r.meta.assetId;
+            const placed = placements[id];
+            const draft = placeDrafts[id] ?? '';
+            return (
+              <Card key={id}>
+                <View style={styles.locateRow}>
+                  <Thumb photo={r} size={64} />
+                  <View style={styles.locateBody}>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {formatPhotoMoment(r.meta.capturedAt)}
+                    </ThemedText>
+
+                    {placed ? (
+                      <>
+                        <ThemedText type="smallBold">📍 {placed.label}</ThemedText>
+                        <View style={styles.chipRow}>
+                          <Chip
+                            label="Change"
+                            selected={false}
+                            onPress={() =>
+                              setPlacements((current) => {
+                                const next = { ...current };
+                                delete next[id];
+                                return next;
+                              })
+                            }
+                          />
+                          {remaining > 0 && (
+                            <Chip
+                              label={`Use for the other ${remaining}`}
+                              selected={false}
+                              onPress={() => placeRemaining(placed)}
+                            />
+                          )}
+                        </View>
+                      </>
+                    ) : (
+                      <>
+                        <ThemedView
+                          type="backgroundElement"
+                          style={[styles.field, { borderColor: theme.accent }]}>
+                          <TextInput
+                            value={draft}
+                            onChangeText={(text) =>
+                              setPlaceDrafts((drafts) => ({ ...drafts, [id]: text }))
+                            }
+                            onSubmitEditing={() => lookupPlace(id)}
+                            placeholder="e.g. Füssen, Germany"
+                            placeholderTextColor={theme.textSecondary}
+                            returnKeyType="search"
+                            style={[styles.input, { color: theme.text }]}
+                          />
+                        </ThemedView>
+                        {placeErrors[id] && (
+                          <ThemedText type="small" themeColor="textSecondary">
+                            Couldn&apos;t find that place. Try a city and country.
+                          </ThemedText>
+                        )}
+                        <GhostButton
+                          label="Set location"
+                          disabled={draft.trim().length === 0}
+                          onPress={() => lookupPlace(id)}
+                        />
+                      </>
+                    )}
+                  </View>
+                </View>
+              </Card>
+            );
+          })}
+
+          <PrimaryButton
+            label={
+              placedCount === 0
+                ? `Skip ${n === 1 ? 'it' : `all ${n}`} and continue`
+                : remaining > 0
+                  ? `Continue: ${placedCount} placed, ${remaining} skipped`
+                  : n === 1
+                    ? 'Continue'
+                    : `Continue with all ${placedCount} placed`
+            }
+            onPress={continueFromLocate}
+            style={styles.cta}
+          />
+        </ScrollView>
+      </PhoneFrame>
+    );
+  }
+
   if (step === 'trips') {
     const totalPhotos = tripGroups.reduce((n, g) => n + g.trip.photoCount, 0);
     const included = tripGroups.filter((g) => !excludedTripIds.has(g.trip.id));
@@ -567,6 +811,39 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
             We grouped {totalPhotos} photos into {tripGroups.length} trips by where and when they
             were taken. Tap ✎ to add details.
           </InfoStrip>
+
+          {/*
+            Say plainly what was left out. A silently shrinking photo count is
+            indistinguishable from a clustering bug, and on an emulator the
+            detected home is wherever the AVD claims to be — so this has to be
+            reversible in one tap.
+          */}
+          {homeSkipped > 0 && (
+            <InfoStrip>
+              <ThemedText type="small">
+                Skipped {homeSkipped} photo{homeSkipped === 1 ? '' : 's'} taken near home
+                {homeBase?.label ? ` (${homeBase.label})` : ''}, so everyday life doesn&apos;t turn
+                into trips.
+              </ThemedText>
+            </InfoStrip>
+          )}
+          {homeSkipped > 0 && (
+            <GhostButton
+              label="Include home photos anyway"
+              onPress={() => buildTrips(readyResults, { includeHome: true })}
+            />
+          )}
+          {unplacedSkipped > 0 && (
+            <InfoStrip>
+              <ThemedText type="small">
+                Left out {unplacedSkipped} photo{unplacedSkipped === 1 ? '' : 's'} with no location
+                that you didn&apos;t place.
+              </ThemedText>
+            </InfoStrip>
+          )}
+          {keptHome && homeBase != null && (
+            <GhostButton label="Skip home photos again" onPress={() => buildTrips(readyResults)} />
+          )}
 
           {tripGroups.map(({ trip, photos, stops }) => {
             const detail = details[trip.id];
@@ -745,11 +1022,24 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
         {candidates && candidates.length > 0 && (
           <>
             <View style={styles.selectAllRow}>
-              <SectionLabel>{`${candidates.length} photos visible`}</SectionLabel>
+              <SectionLabel>{`${visibleCandidates.length} photos visible`}</SectionLabel>
               <GhostButton label="Select all" onPress={selectAll} style={styles.selectAll} />
             </View>
+            {screenshotCount > 0 && (
+              <View style={styles.chipRow}>
+                <Chip
+                  label={
+                    showScreenshots
+                      ? `Hide ${screenshotCount} screenshot${screenshotCount === 1 ? '' : 's'}`
+                      : `Show ${screenshotCount} hidden screenshot${screenshotCount === 1 ? '' : 's'}`
+                  }
+                  selected={showScreenshots}
+                  onPress={toggleScreenshots}
+                />
+              </View>
+            )}
             <View style={styles.grid}>
-              {candidates.map((photo) => {
+              {visibleCandidates.map((photo) => {
                 const selected = selectedIds.has(photo.id);
                 return (
                   <View key={photo.id} style={styles.gridItem}>
@@ -782,7 +1072,7 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
         <PrimaryButton
           label={`Find trips in ${selectedIds.size} photo${selectedIds.size === 1 ? '' : 's'}`}
           disabled={selectedIds.size === 0}
-          onPress={analyse}
+          onPress={() => analyse()}
           style={styles.cta}
         />
       </ScrollView>
@@ -920,6 +1210,15 @@ const styles = StyleSheet.create({
   // Deselected trips stay visible but recede — they're skipped, not deleted.
   excluded: {
     opacity: 0.5,
+  },
+  locateRow: {
+    flexDirection: 'row',
+    gap: Spacing.three,
+    alignItems: 'flex-start',
+  },
+  locateBody: {
+    flex: 1,
+    gap: Spacing.two,
   },
   stopRow: {
     flexDirection: 'row',

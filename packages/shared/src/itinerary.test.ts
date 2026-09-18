@@ -26,6 +26,7 @@ function at(assetId: string, place: { lat: number; lng: number } | null, ms: num
     city: null,
     region: null,
     country: null,
+    locationSource: null,
     source: 'camera_roll',
   };
 }

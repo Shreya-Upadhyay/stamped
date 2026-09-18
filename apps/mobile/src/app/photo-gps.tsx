@@ -5,7 +5,13 @@ import { useCallback, useMemo, useRef } from 'react';
 import { Linking } from 'react-native';
 
 import { TripsExperience } from '@/features/trips/trips-experience';
-import type { CandidatePhoto, Place, PhotoResult, PhotoSource } from '@/features/trips/types';
+import type {
+  CandidatePhoto,
+  FoundPlace,
+  Place,
+  PhotoResult,
+  PhotoSource,
+} from '@/features/trips/types';
 
 /**
  * How many photos the picker offers, newest first.
@@ -39,6 +45,32 @@ function exifCapturedAt(exif: Record<string, unknown> | null): number | null {
     if (parsed !== null) return parsed;
   }
   return null;
+}
+
+/**
+ * Ids of everything in the device's Screenshots album.
+ *
+ * One call for the whole library, rather than asking each asset which album
+ * it belongs to. Returns an empty set if the album doesn't exist or can't be
+ * read — then the path check in `looksLikeScreenshot` still catches most.
+ */
+async function screenshotAssetIds(): Promise<Set<string>> {
+  try {
+    const album = await MediaLibrary.Album.get('Screenshots');
+    if (!album) return new Set();
+    const assets = await album.getAssets();
+    return new Set(assets.map((asset) => asset.id));
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Android files screenshots under a folder named Screenshots; the asset URI
+ * carries that path, and it's fetched for the thumbnail anyway.
+ */
+function looksLikeScreenshot(uri: string): boolean {
+  return /\/screenshots?\//i.test(uri);
 }
 
 /**
@@ -76,17 +108,25 @@ export default function PhotoGpsScreen() {
     // Newest first by capture time — what a photo picker should show. Photos
     // missing DATE_TAKEN sort to the end rather than disappearing, since the
     // limit is generous.
-    const assets = await new MediaLibrary.Query()
-      .eq(MediaLibrary.AssetField.MEDIA_TYPE, MediaLibrary.MediaType.IMAGE)
-      .orderBy({ key: MediaLibrary.AssetField.CREATION_TIME, ascending: false })
-      .limit(CANDIDATE_LIMIT)
-      .exe();
+    const [assets, screenshots] = await Promise.all([
+      new MediaLibrary.Query()
+        .eq(MediaLibrary.AssetField.MEDIA_TYPE, MediaLibrary.MediaType.IMAGE)
+        .orderBy({ key: MediaLibrary.AssetField.CREATION_TIME, ascending: false })
+        .limit(CANDIDATE_LIMIT)
+        .exe(),
+      screenshotAssetIds(),
+    ]);
 
     return Promise.all(
       assets.map(async (asset): Promise<CandidatePhoto> => {
         assetsById.set(asset.id, asset);
         const [uri, filename] = await Promise.all([asset.getUri(), asset.getFilename()]);
-        return { id: asset.id, uri, filename };
+        return {
+          id: asset.id,
+          uri,
+          filename,
+          isScreenshot: screenshots.has(asset.id) || looksLikeScreenshot(uri),
+        };
       }),
     );
   }, [assetsById]);
@@ -138,6 +178,7 @@ export default function PhotoGpsScreen() {
           lat: location?.latitude ?? null,
           lng: location?.longitude ?? null,
           hasGps: location != null,
+          locationSource: location != null ? 'exif' : null,
           capturedAt,
           city: null,
           region: null,
@@ -185,6 +226,23 @@ export default function PhotoGpsScreen() {
     [ensureLocationPermission],
   );
 
+  const findPlace = useCallback(
+    async (query: string): Promise<FoundPlace | null> => {
+      const trimmed = query.trim();
+      if (trimmed.length === 0) return null;
+      // Forward geocoding sits behind the same Android permission gate as
+      // reverse geocoding.
+      if (!(await ensureLocationPermission())) return null;
+      try {
+        const [match] = await Location.geocodeAsync(trimmed);
+        return match ? { lat: match.latitude, lng: match.longitude, label: trimmed } : null;
+      } catch {
+        return null;
+      }
+    },
+    [ensureLocationPermission],
+  );
+
   const source: PhotoSource = useMemo(
     () => ({
       permission: permissionResponse
@@ -209,8 +267,9 @@ export default function PhotoGpsScreen() {
       loadCandidates,
       readMeta,
       reverseGeocode,
+      findPlace,
     }),
-    [permissionResponse, requestPermission, loadCandidates, readMeta, reverseGeocode],
+    [permissionResponse, requestPermission, loadCandidates, readMeta, reverseGeocode, findPlace],
   );
 
   return <TripsExperience source={source} />;

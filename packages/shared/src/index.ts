@@ -2,6 +2,8 @@ export * from './types/photo';
 export * from './types/trip';
 export * from './async';
 export * from './clustering';
+export * from './home';
 export * from './place';
+export * from './placement';
 export * from './types/stop';
 export * from './itinerary';

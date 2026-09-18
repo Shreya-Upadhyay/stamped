@@ -52,6 +52,7 @@ function loadPhotos(): { meta: PhotoMeta; filename: string }[] {
       city: null,
       region: null,
       country: null,
+      locationSource: p.hasGps ? 'exif' : null,
       source: 'camera_roll',
     },
   }));
@@ -102,9 +103,17 @@ describe.skipIf(!hasData)('clustering report (real photo library)', () => {
   it('lists the trips at the current defaults', () => {
     const photos = loadPhotos();
     const byAsset = new Map(photos.map((p) => [p.meta.assetId, p.filename]));
-    const groups = segmentPhotosIntoTrips(photos.map((p) => p.meta));
 
-    console.log('\n═══ Trips at the current defaults ═══');
+    // Inspect a candidate radius without editing the default:
+    //   STAMPED_TRIP_RADIUS_KM=100 npm run tune
+    const override = process.env.STAMPED_TRIP_RADIUS_KM;
+    const tripRadiusKm = override ? Number(override) : undefined;
+    const groups = segmentPhotosIntoTrips(
+      photos.map((p) => p.meta),
+      tripRadiusKm ? { tripRadiusKm } : {},
+    );
+
+    console.log(`\n═══ Trips at ${tripRadiusKm ?? 500} km ═══`);
     groups.forEach((group, index) => {
       const trip = buildTrip(group, {
         userId: 'tuning',

@@ -19,6 +19,19 @@ export type CandidatePhoto = {
   filename: string;
   /** Fallback tile colour, used when `uri` is null. */
   color?: string;
+  /**
+   * A screenshot rather than a photograph. Hidden from the picker by default:
+   * a screenshot records what was on a screen, never where someone stood.
+   */
+  isScreenshot?: boolean;
+};
+
+/** A place the user typed, resolved to coordinates. */
+export type FoundPlace = {
+  lat: number;
+  lng: number;
+  /** What the user typed, kept for display. */
+  label: string;
 };
 
 /**
@@ -83,4 +96,9 @@ export type PhotoSource = {
     onProgress: (completed: number, total: number) => void,
   ) => Promise<PhotoResult[]>;
   reverseGeocode: (point: LatLng) => Promise<Place>;
+  /**
+   * Resolves a place the user typed ("Füssen, Germany") to coordinates, for
+   * placing a photo that recorded no location. Null when nothing matches.
+   */
+  findPlace: (query: string) => Promise<FoundPlace | null>;
 };

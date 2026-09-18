@@ -2,7 +2,13 @@ import type { LatLng } from '@stamped/shared';
 import { useCallback, useMemo } from 'react';
 
 import { TripsExperience } from '@/features/trips/trips-experience';
-import type { CandidatePhoto, Place, PhotoResult, PhotoSource } from '@/features/trips/types';
+import type {
+  CandidatePhoto,
+  FoundPlace,
+  Place,
+  PhotoResult,
+  PhotoSource,
+} from '@/features/trips/types';
 
 // expo-media-library has no web implementation (its native binding is
 // undefined on web), so this file must never import it — Expo Router
@@ -130,6 +136,14 @@ function nearestCity(point: LatLng): Place {
   return { name, city: best.city, country: best.country };
 }
 
+/** Stands in for forward geocoding, which Expo doesn't offer on web. */
+function findFixturePlace(query: string): FoundPlace | null {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  const city = [PARIS, ROME, TOKYO].find((c) => q.includes(c.city.toLowerCase()));
+  return city ? { lat: city.lat, lng: city.lng, label: query.trim() } : null;
+}
+
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 export default function PhotoGpsScreenWeb() {
@@ -140,6 +154,7 @@ export default function PhotoGpsScreenWeb() {
       uri: null,
       filename: f.filename,
       color: f.color,
+      isScreenshot: f.filename.startsWith('screenshot'),
     }));
   }, []);
 
@@ -167,6 +182,7 @@ export default function PhotoGpsScreenWeb() {
             lat: f.place?.lat ?? null,
             lng: f.place?.lng ?? null,
             hasGps: f.place != null,
+            locationSource: f.place != null ? 'exif' : null,
             capturedAt: base + f.offset,
             city: null,
             region: null,
@@ -191,6 +207,10 @@ export default function PhotoGpsScreenWeb() {
       reverseGeocode: async (point: LatLng) => {
         await delay(80);
         return nearestCity(point);
+      },
+      findPlace: async (query: string) => {
+        await delay(80);
+        return findFixturePlace(query);
       },
     }),
     [loadCandidates, readMeta],

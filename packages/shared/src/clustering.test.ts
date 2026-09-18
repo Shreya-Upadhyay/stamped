@@ -34,6 +34,7 @@ function makePhoto(
     city: null,
     region: null,
     country: null,
+    locationSource: null,
     source: 'camera_roll',
     ...overrides,
   };
