@@ -1,8 +1,14 @@
 import type { LatLng } from '@stamped/shared';
 import { useCallback, useMemo } from 'react';
 
-import { TripFlow } from '@/features/trips/trip-flow';
-import type { CandidatePhoto, PhotoResult, PhotoSource } from '@/features/trips/types';
+import { TripsExperience } from '@/features/trips/trips-experience';
+import type {
+  CandidatePhoto,
+  FoundPlace,
+  Place,
+  PhotoResult,
+  PhotoSource,
+} from '@/features/trips/types';
 
 // expo-media-library has no web implementation (its native binding is
 // undefined on web), so this file must never import it — Expo Router
@@ -17,9 +23,27 @@ const LOCAL_USER_ID = 'local-device-user';
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HOUR_MS = 60 * 60 * 1000;
 
-const PARIS = { lat: 48.8566, lng: 2.3522, city: 'Paris', country: 'France' };
-const ROME = { lat: 41.9028, lng: 12.4964, city: 'Rome', country: 'Italy' };
-const TOKYO = { lat: 35.6762, lng: 139.6503, city: 'Tokyo', country: 'Japan' };
+const PARIS = {
+  lat: 48.8566,
+  lng: 2.3522,
+  city: 'Paris',
+  country: 'France',
+  landmarks: ['Eiffel Tower', 'Musée du Louvre', 'Jardin du Luxembourg'],
+};
+const ROME = {
+  lat: 41.9028,
+  lng: 12.4964,
+  city: 'Rome',
+  country: 'Italy',
+  landmarks: ['Colosseum', 'Trevi Fountain', 'Pantheon'],
+};
+const TOKYO = {
+  lat: 35.6762,
+  lng: 139.6503,
+  city: 'Tokyo',
+  country: 'Japan',
+  landmarks: ['Shibuya Crossing', 'Meiji Jingu', 'Tsukiji Outer Market'],
+};
 
 const base = Date.now() - 30 * DAY_MS;
 
@@ -34,6 +58,11 @@ type Fixture = {
 // stay together, a big distance jump splits (Paris -> Rome), a big time gap
 // splits (Rome -> Tokyo), and a no-GPS photo is absorbed without forcing a
 // split. Mirrors packages/shared/src/clustering.test.ts.
+//
+// Also covers both no-GPS shapes the itinerary has to handle: `screenshot.png`
+// sits inside a stop that has GPS (so the stop is still named), while
+// `no-gps-note.jpg` is stranded on its own by a long gap, producing a stop
+// with no coordinates at all — the case that has to fall back to asking.
 const FIXTURES: Fixture[] = [
   { filename: 'paris-1.jpg', offset: 0, place: PARIS, color: '#4A6496' },
   {
@@ -58,11 +87,40 @@ const FIXTURES: Fixture[] = [
     place: { lat: TOKYO.lat, lng: TOKYO.lng + 0.01 },
     color: '#469678',
   },
+  {
+    filename: 'no-gps-note.jpg',
+    offset: 12 * DAY_MS + 10 * HOUR_MS,
+    place: null,
+    color: '#8A7A6E',
+  },
   { filename: 'tokyo-3.jpg', offset: 13 * DAY_MS, place: TOKYO, color: '#50A082' },
 ];
 
-/** Nearest fixture city to a centroid — stands in for the OS geocoder on web. */
-function nearestCity(point: LatLng): { city: string | null; country: string | null } {
+/**
+ * Scatters a coordinate into a bucket index. Rounded to ~100 m first, so the
+ * same spot always resolves to the same name while neighbouring stops differ.
+ * Needs to actually mix — arithmetic on the raw degrees keeps landing nearby
+ * points in the same bucket.
+ */
+function hashPoint(point: LatLng): number {
+  const key = `${point.lat.toFixed(3)},${point.lng.toFixed(3)}`;
+  let h = 0;
+  for (let i = 0; i < key.length; i += 1) {
+    h = (Math.imul(h, 31) + key.charCodeAt(i)) | 0;
+  }
+  return Math.abs(h);
+}
+
+/**
+ * Nearest fixture city to a point — stands in for the OS geocoder on web,
+ * which has none.
+ *
+ * `name` mimics the placemark a real device returns, picked from the city's
+ * landmarks by the point's own coordinates so that nearby-but-distinct stops
+ * get distinct names — otherwise every stop in a city reads the same and the
+ * itinerary screen can't be reviewed properly.
+ */
+function nearestCity(point: LatLng): Place {
   const cities = [PARIS, ROME, TOKYO];
   let best = cities[0];
   let bestDist = Number.POSITIVE_INFINITY;
@@ -73,7 +131,17 @@ function nearestCity(point: LatLng): { city: string | null; country: string | nu
       best = c;
     }
   }
-  return { city: best.city, country: best.country };
+
+  const name = best.landmarks[hashPoint(point) % best.landmarks.length];
+  return { name, city: best.city, country: best.country };
+}
+
+/** Stands in for forward geocoding, which Expo doesn't offer on web. */
+function findFixturePlace(query: string): FoundPlace | null {
+  const q = query.trim().toLowerCase();
+  if (!q) return null;
+  const city = [PARIS, ROME, TOKYO].find((c) => q.includes(c.city.toLowerCase()));
+  return city ? { lat: city.lat, lng: city.lng, label: query.trim() } : null;
 }
 
 const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -86,6 +154,7 @@ export default function PhotoGpsScreenWeb() {
       uri: null,
       filename: f.filename,
       color: f.color,
+      isScreenshot: f.filename.startsWith('screenshot'),
     }));
   }, []);
 
@@ -113,6 +182,7 @@ export default function PhotoGpsScreenWeb() {
             lat: f.place?.lat ?? null,
             lng: f.place?.lng ?? null,
             hasGps: f.place != null,
+            locationSource: f.place != null ? 'exif' : null,
             capturedAt: base + f.offset,
             city: null,
             region: null,
@@ -138,9 +208,13 @@ export default function PhotoGpsScreenWeb() {
         await delay(80);
         return nearestCity(point);
       },
+      findPlace: async (query: string) => {
+        await delay(80);
+        return findFixturePlace(query);
+      },
     }),
     [loadCandidates, readMeta],
   );
 
-  return <TripFlow source={source} />;
+  return <TripsExperience source={source} />;
 }

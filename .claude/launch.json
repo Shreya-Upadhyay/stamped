@@ -6,6 +6,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "web", "--workspace", "apps/mobile", "--", "--port", "8092"],
       "port": 8092
+    },
+    {
+      "name": "mobile-native",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "start", "--workspace", "apps/mobile", "--", "--dev-client"],
+      "port": 8081
     }
   ]
 }

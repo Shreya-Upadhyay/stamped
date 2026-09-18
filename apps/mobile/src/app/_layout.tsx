@@ -1,29 +1,36 @@
-import { DarkTheme, DefaultTheme, Stack, ThemeProvider } from 'expo-router';
+import { DarkTheme, DefaultTheme, ThemeProvider } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
-import { useColorScheme } from 'react-native';
+import { StyleSheet, useColorScheme, View } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
+import AppTabs from '@/components/app-tabs';
 import { SessionProvider, useSession } from '@/features/auth/session';
+import { TripArchiveProvider } from '@/features/trips/archive';
+import { OnboardingFlow } from '@/features/onboarding/onboarding-flow';
 
 SplashScreen.preventAutoHideAsync();
 
 /**
- * Onboarding and the main app are separate stacks, gated on session state.
- * `Stack.Protected` keeps the guard declarative — no redirect effects, and no
- * flash of the wrong screen on first render.
+ * Onboarding renders *over* the tab navigator rather than instead of it.
+ *
+ * Two things forced this shape, both found the hard way on Android:
+ *
+ * 1. The tab navigator has to stay mounted at the root. Replacing it — with a
+ *    `Stack`, a `Slot`, or a plain component — left the app blank on a cold
+ *    start (with a native `Stack`, react-native-screens also fails its Fabric
+ *    setup outright). Covering it costs nothing, since the tabs aren't meant
+ *    to be visible during onboarding anyway.
+ * 2. Onboarding is a linear wizard, so it's local step state, not routes.
+ *    Routing it meant route groups and redirect guards, which looped.
  */
-function RootNavigator() {
+function OnboardingGate() {
   const { signedIn } = useSession();
+  if (signedIn) return null;
 
   return (
-    <Stack screenOptions={{ headerShown: false }}>
-      <Stack.Protected guard={!signedIn}>
-        <Stack.Screen name="(onboarding)" />
-      </Stack.Protected>
-      <Stack.Protected guard={signedIn}>
-        <Stack.Screen name="(tabs)" />
-      </Stack.Protected>
-    </Stack>
+    <View style={StyleSheet.absoluteFill}>
+      <OnboardingFlow />
+    </View>
   );
 }
 
@@ -32,10 +39,13 @@ export default function RootLayout() {
 
   return (
     <SessionProvider>
+      <TripArchiveProvider>
       <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
         <AnimatedSplashOverlay />
-        <RootNavigator />
+        <AppTabs />
+        <OnboardingGate />
       </ThemeProvider>
+      </TripArchiveProvider>
     </SessionProvider>
   );
 }

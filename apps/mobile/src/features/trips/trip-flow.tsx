@@ -1,4 +1,15 @@
-import { buildTrip, computeCentroid, segmentPhotosIntoTrips } from '@stamped/shared';
+import {
+  buildStop,
+  buildTrip,
+  dominantValue,
+  formatTripDateRange,
+  mapWithLimit,
+  partitionHomePhotos,
+  partitionUnlocated,
+  placePhoto,
+  segmentPhotosIntoTrips,
+  segmentTripIntoStops,
+} from '@stamped/shared';
 import { Image } from 'expo-image';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { ScrollView, StyleSheet, TextInput, View } from 'react-native';
@@ -13,30 +24,84 @@ import { Card, Chip, InfoStrip, Pill, SectionLabel } from '@/components/ui/surfa
 import { BottomTabInset, Radius, Spacing } from '@/constants/theme';
 import { useTheme } from '@/hooks/use-theme';
 
-import type { CandidatePhoto, PhotoResult, PhotoSource, TripDetails, TripGroup } from './types';
+import { useSession } from '@/features/auth/session';
+
+import { useTripArchive } from './archive';
+import type {
+  CandidatePhoto,
+  FoundPlace,
+  PhotoResult,
+  PhotoSource,
+  StopGroup,
+  TripDetails,
+  TripGroup,
+} from './types';
 
 // No auth system yet this milestone (see CLAUDE.md) — placeholder until real user ids exist.
 const LOCAL_USER_ID = 'local-device-user';
 
 const CATEGORIES = ['Couple', 'Solo', 'Family', 'Group', 'Business', 'Other'];
 
-type Step = 'select' | 'reading' | 'trips' | 'validate' | 'done';
+/**
+ * How many place lookups to run at once.
+ *
+ * The device geocoder throttles when hit with hundreds of concurrent
+ * lookups, and a throttled lookup fails exactly like a missing permission —
+ * every stop comes back unnamed, which is very hard to tell apart. A small
+ * bound keeps a big library reliable while staying far quicker than going
+ * strictly one at a time.
+ */
+const GEOCODE_CONCURRENCY = 4;
+
+type Step = 'select' | 'reading' | 'locate' | 'trips' | 'validate' | 'itinerary' | 'done';
 
 /** Progress-bar position for each step of the flow. */
 const STEP_INDEX: Record<Step, number> = {
   select: 0,
   reading: 0,
+  locate: 0,
   trips: 1,
   validate: 1,
+  itinerary: 1,
   done: 2,
 };
 
-function formatDateRange(startAt: number, endAt: number): string {
-  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
-  const start = new Date(startAt).toLocaleDateString(undefined, opts);
-  const end = new Date(endAt).toLocaleDateString(undefined, opts);
-  const year = new Date(endAt).getFullYear();
-  return start === end ? `${start} ${year}` : `${start} – ${end} ${year}`;
+/** "Sat 30 May" from a YYYY-MM-DD day key. */
+function formatDayHeading(day: string): string {
+  const [year, month, date] = day.split('-').map(Number);
+  return new Date(year, month - 1, date).toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'long',
+  });
+}
+
+function formatTime(ms: number): string {
+  return new Date(ms).toLocaleTimeString(undefined, { hour: 'numeric', minute: '2-digit' });
+}
+
+/** One figure from the celebration stat row. */
+function Stat({ value, label }: { value: string; label: string }) {
+  return (
+    <ThemedView type="backgroundElement" style={styles.stat}>
+      <ThemedText type="cardTitle" themeColor="brand">
+        {value}
+      </ThemedText>
+      <ThemedText type="small" themeColor="textSecondary">
+        {label}
+      </ThemedText>
+    </ThemedView>
+  );
+}
+
+/** "Sat 30 May, 4:12 pm" for a photo's capture time. */
+function formatPhotoMoment(ms: number): string {
+  const date = new Date(ms).toLocaleDateString(undefined, {
+    weekday: 'short',
+    day: 'numeric',
+    month: 'short',
+  });
+  return `${date}, ${formatTime(ms)}`;
 }
 
 /** Square thumbnail; falls back to a solid tile when the source has no image. */
@@ -50,17 +115,56 @@ function Thumb({ photo, size = 56 }: { photo: { uri: string | null; color?: stri
   return <Image source={{ uri: photo.uri }} style={style} contentFit="cover" />;
 }
 
-export function TripFlow({ source }: { source: PhotoSource }) {
+export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () => void }) {
   const theme = useTheme();
+  const { stamp } = useTripArchive();
+  const { homeBase } = useSession();
 
   const [step, setStep] = useState<Step>('select');
   const [candidates, setCandidates] = useState<CandidatePhoto[] | null>(null);
   const [loadingCandidates, setLoadingCandidates] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [progress, setProgress] = useState({ completed: 0, total: 0 });
+  /** Which slow pass the progress bar is currently reporting on. */
+  const [phase, setPhase] = useState<'reading' | 'placing'>('reading');
   const [tripGroups, setTripGroups] = useState<TripGroup[]>([]);
   const [details, setDetails] = useState<Record<string, TripDetails>>({});
   const [editingTripId, setEditingTripId] = useState<string | null>(null);
+  /** Names the user has accepted or typed, keyed by stop id. */
+  const [stopNames, setStopNames] = useState<Record<string, string>>({});
+  /** Why place lookup produced nothing, when it produced nothing. */
+  const [geocodeDiagnosis, setGeocodeDiagnosis] = useState<string | null>(null);
+  /** How many photos the last run skipped for being taken at home. */
+  const [homeSkipped, setHomeSkipped] = useState(0);
+  /** Whether the last run deliberately kept home photos in. */
+  const [keptHome, setKeptHome] = useState(false);
+  /**
+   * Which screen opened the itinerary, so its back button returns there.
+   * It's reachable both from a trip card and from the details step; sending
+   * everyone to details drops you on a screen you never visited.
+   */
+  const [itineraryOrigin, setItineraryOrigin] = useState<'trips' | 'validate'>('validate');
+  /**
+   * Trips the user has deselected on the detection screen. Tracking the
+   * excluded set rather than the included one means newly detected trips are
+   * selected by default, which is what the prototype shows.
+   */
+  const [excludedTripIds, setExcludedTripIds] = useState<Set<string>>(new Set());
+  /** Screenshots are hidden from the picker unless asked for. */
+  const [showScreenshots, setShowScreenshots] = useState(false);
+  /**
+   * Located photos from the last read, kept so re-running with or without
+   * home photos doesn't re-read the library and discard manual placements.
+   */
+  const [readyResults, setReadyResults] = useState<PhotoResult[]>([]);
+  /** Selected photos that recorded no location, awaiting a place or a skip. */
+  const [unlocatedResults, setUnlocatedResults] = useState<PhotoResult[]>([]);
+  /** Where the user placed each un-located photo, keyed by asset id. */
+  const [placements, setPlacements] = useState<Record<string, FoundPlace>>({});
+  const [placeDrafts, setPlaceDrafts] = useState<Record<string, string>>({});
+  const [placeErrors, setPlaceErrors] = useState<Record<string, boolean>>({});
+  /** Un-located photos left unplaced and so dropped from the last run. */
+  const [unplacedSkipped, setUnplacedSkipped] = useState(0);
 
   const granted = source.permission?.granted ?? false;
 
@@ -82,62 +186,218 @@ export function TripFlow({ source }: { source: PhotoSource }) {
     });
   }, []);
 
-  const selectAll = useCallback(() => {
-    setSelectedIds(new Set((candidates ?? []).map((c) => c.id)));
-  }, [candidates]);
+  const screenshotCount = useMemo(
+    () => (candidates ?? []).filter((c) => c.isScreenshot).length,
+    [candidates],
+  );
+  const visibleCandidates = useMemo(
+    () => (candidates ?? []).filter((c) => showScreenshots || !c.isScreenshot),
+    [candidates, showScreenshots],
+  );
 
-  /** Read metadata for the selection, then cluster + geocode into trips. */
+  const toggleScreenshots = useCallback(() => {
+    if (showScreenshots) {
+      // A photo shouldn't stay selected once it's hidden from view.
+      const hidden = new Set((candidates ?? []).filter((c) => c.isScreenshot).map((c) => c.id));
+      setSelectedIds((prev) => new Set([...prev].filter((id) => !hidden.has(id))));
+    }
+    setShowScreenshots(!showScreenshots);
+  }, [showScreenshots, candidates]);
+
+  const selectAll = useCallback(() => {
+    setSelectedIds(new Set(visibleCandidates.map((c) => c.id)));
+  }, [visibleCandidates]);
+
+  /**
+   * Clusters located photos into trips and names every stop. Every photo
+   * passed in must have coordinates: un-located ones are placed or dropped on
+   * the locate step before this runs.
+   */
+  const buildTrips = useCallback(
+    async (results: PhotoResult[], { includeHome = false }: { includeHome?: boolean } = {}) => {
+    setKeptHome(includeHome);
+    setStep('reading');
+    setGeocodeDiagnosis(null);
+
+    // First reason place lookup came back empty, kept so the itinerary can
+    // explain itself instead of showing a screen of blank fields.
+    let diagnosis: string | null = null;
+
+    const byAssetId = new Map(results.map((r) => [r.meta.assetId, r]));
+
+    // Drop photos taken around home before grouping. Without this, everyday
+    // life accumulates into one enormous trip spanning years — the flaw
+    // recorded in docs/adr/0001-on-device-trip-clustering.md.
+    const { away, atHome } = partitionHomePhotos(
+      results.map((r) => r.meta),
+      includeHome ? null : homeBase,
+    );
+    setHomeSkipped(atHome.length);
+
+    const groups = segmentPhotosIntoTrips(away);
+
+    // Segment first, geocode second. Splitting the phases means every lookup
+    // can be counted before any of them runs, so the place-naming pass gets a
+    // real progress bar instead of looking frozen on a big library.
+    const skeleton = groups.map((group, index) => {
+      const tripId = `${LOCAL_USER_ID}-trip-${group[0].capturedAt}-${index}`;
+      const stopGroups: StopGroup[] = segmentTripIntoStops(group).map((stopPhotos, stopIndex) => ({
+        stop: buildStop(stopPhotos, {
+          tripId,
+          stopId: `${tripId}-stop-${stopIndex}`,
+          order: stopIndex,
+        }),
+        photos: stopPhotos
+          .map((photo) => byAssetId.get(photo.assetId))
+          .filter((r): r is PhotoResult => r != null),
+      }));
+      return { group, tripId, stopGroups };
+    });
+
+    // Geocode once per stop rather than once per photo: a place visited is
+    // what the itinerary lists, and on a real trip that is the difference
+    // between tens of lookups and thousands.
+    const locatable = skeleton
+      .flatMap((entry) => entry.stopGroups)
+      .filter(({ stop }) => stop.lat != null && stop.lng != null);
+
+    setPhase('placing');
+    setProgress({ completed: 0, total: locatable.length });
+
+    let placed = 0;
+    await mapWithLimit(locatable, GEOCODE_CONCURRENCY, async ({ stop }) => {
+      try {
+        const place = await source.reverseGeocode({ lat: stop.lat!, lng: stop.lng! });
+        stop.suggestedName = place.name ?? place.city;
+        stop.city = place.city;
+        stop.country = place.country;
+        if (stop.suggestedName == null) {
+          // The lookup succeeded but had nothing to say about this point —
+          // distinct from it failing outright.
+          diagnosis ??= 'the geocoder returned no match for these coordinates';
+        }
+      } catch (error) {
+        // Offline, or no working geocoder. Leave the stop unnamed so the user
+        // can type one, rather than failing the whole run — but keep why, so
+        // the UI isn't left guessing.
+        diagnosis ??= error instanceof Error ? error.message : String(error);
+      }
+      placed += 1;
+      setProgress({ completed: placed, total: locatable.length });
+    });
+
+    const built = skeleton.map(({ group, tripId, stopGroups }): TripGroup => {
+      // The trip takes its name from wherever most of it happened.
+      const country = dominantValue(stopGroups.map((s) => s.stop.country));
+      const city = dominantValue(stopGroups.map((s) => s.stop.city));
+
+      const trip = buildTrip(group, { userId: LOCAL_USER_ID, tripId, city, country });
+      const ids = new Set(group.map((photo) => photo.assetId));
+      return {
+        trip,
+        photos: results.filter((r) => ids.has(r.meta.assetId)),
+        stops: stopGroups,
+      };
+    });
+
+    setGeocodeDiagnosis(diagnosis);
+    setTripGroups(built);
+    setDetails(
+      Object.fromEntries(built.map((g) => [g.trip.id, { title: g.trip.title, category: 'Group' }])),
+    );
+    setStep('trips');
+    },
+    [source, homeBase],
+  );
+
+  /**
+   * Reads the selection. Photos with coordinates go straight on; any that
+   * recorded none are held for the locate step, where the user can place them.
+   */
   const analyse = useCallback(async () => {
     const ids = [...selectedIds];
     if (ids.length === 0) return;
 
     setStep('reading');
+    setPhase('reading');
     setProgress({ completed: 0, total: ids.length });
 
     const results = await source.readMeta(ids, (completed, total) =>
       setProgress({ completed, total }),
     );
 
-    const groups = segmentPhotosIntoTrips(results.map((r) => r.meta));
-    const built = await Promise.all(
-      groups.map(async (group, index): Promise<TripGroup> => {
-        const tripId = `${LOCAL_USER_ID}-trip-${group[0].capturedAt}-${index}`;
-        const centroid = computeCentroid(
-          group
-            .filter((p) => p.hasGps && p.lat != null && p.lng != null)
-            .map((p) => ({ lat: p.lat!, lng: p.lng! })),
-        );
+    const { unlocated } = partitionUnlocated(results.map((r) => r.meta));
+    const unlocatedIds = new Set(unlocated.map((p) => p.assetId));
+    const located = results.filter((r) => !unlocatedIds.has(r.meta.assetId));
 
-        let city: string | null = null;
-        let country: string | null = null;
-        if (centroid) {
-          try {
-            const place = await source.reverseGeocode(centroid);
-            city = place.city;
-            country = place.country;
-          } catch {
-            // Geocoder unavailable/offline — degrade to no place name, don't fail the flow.
-          }
-        }
+    setReadyResults(located);
+    setUnplacedSkipped(0);
 
-        const trip = buildTrip(group, { userId: LOCAL_USER_ID, tripId, city, country });
-        const ids = new Set(group.map((p) => p.assetId));
-        return { trip, photos: results.filter((r) => ids.has(r.meta.assetId)) };
-      }),
-    );
+    if (unlocatedIds.size > 0) {
+      setUnlocatedResults(results.filter((r) => unlocatedIds.has(r.meta.assetId)));
+      setPlacements({});
+      setPlaceDrafts({});
+      setPlaceErrors({});
+      setStep('locate');
+      return;
+    }
+    await buildTrips(located);
+  }, [selectedIds, source, buildTrips]);
 
-    setTripGroups(built);
-    setDetails(
-      Object.fromEntries(built.map((g) => [g.trip.id, { title: g.trip.title, category: 'Group' }])),
-    );
-    setStep('trips');
-  }, [selectedIds, source]);
+  const lookupPlace = useCallback(
+    async (assetId: string) => {
+      setPlaceErrors((errors) => ({ ...errors, [assetId]: false }));
+      const found = await source.findPlace(placeDrafts[assetId] ?? '');
+      if (found) setPlacements((current) => ({ ...current, [assetId]: found }));
+      else setPlaceErrors((errors) => ({ ...errors, [assetId]: true }));
+    },
+    [placeDrafts, source],
+  );
+
+  /** Applies one placement to every photo still waiting: the common case. */
+  const placeRemaining = useCallback(
+    (place: FoundPlace) => {
+      setPlacements((current) => {
+        const next = { ...current };
+        for (const r of unlocatedResults) next[r.meta.assetId] ??= place;
+        return next;
+      });
+    },
+    [unlocatedResults],
+  );
+
+  /** Keeps what the user placed, drops the rest, and clusters. */
+  const continueFromLocate = useCallback(() => {
+    const placed = unlocatedResults
+      .filter((r) => placements[r.meta.assetId])
+      .map((r) => ({ ...r, meta: placePhoto(r.meta, placements[r.meta.assetId]) }));
+    const all = [...readyResults, ...placed].sort((a, b) => a.meta.capturedAt - b.meta.capturedAt);
+    setReadyResults(all);
+    setUnplacedSkipped(unlocatedResults.length - placed.length);
+    void buildTrips(all);
+  }, [unlocatedResults, placements, readyResults, buildTrips]);
+
+  const toggleTripIncluded = useCallback((tripId: string) => {
+    setExcludedTripIds((previous) => {
+      const next = new Set(previous);
+      if (next.has(tripId)) next.delete(tripId);
+      else next.add(tripId);
+      return next;
+    });
+  }, []);
 
   const restart = useCallback(() => {
     setSelectedIds(new Set());
+    setExcludedTripIds(new Set());
     setTripGroups([]);
     setDetails({});
+    setStopNames({});
+    setGeocodeDiagnosis(null);
     setEditingTripId(null);
+    setReadyResults([]);
+    setUnlocatedResults([]);
+    setPlacements({});
+    setUnplacedSkipped(0);
     setStep('select');
   }, []);
 
@@ -187,7 +447,10 @@ export function TripFlow({ source }: { source: PhotoSource }) {
     const pct = progress.total ? Math.round((progress.completed / progress.total) * 100) : 0;
     return (
       <PhoneFrame>
-        <ScreenHeader title="Reading photos" subtitle="finding where you were" />
+        <ScreenHeader
+          title={phase === 'reading' ? 'Reading photos' : 'Finding place names'}
+          subtitle={phase === 'reading' ? 'finding where you were' : 'naming each stop'}
+        />
         <StepProgress steps={3} current={STEP_INDEX.reading} />
         <ThemedView style={styles.centered}>
           <ThemedText type="title" themeColor="brand">
@@ -199,9 +462,15 @@ export function TripFlow({ source }: { source: PhotoSource }) {
             />
           </ThemedView>
           <ThemedText type="small" themeColor="textSecondary">
-            Reading photo {progress.completed} of {progress.total}
+            {phase === 'reading'
+              ? `Reading photo ${progress.completed} of ${progress.total}`
+              : `Naming stop ${progress.completed} of ${progress.total}`}
           </ThemedText>
-          <InfoStrip>Reading location and time from each photo, on your device.</InfoStrip>
+          <InfoStrip>
+            {phase === 'reading'
+              ? 'Reading location and time from each photo, on your device.'
+              : 'Looking up a name for each place you stopped, on your device.'}
+          </InfoStrip>
         </ThemedView>
       </PhoneFrame>
     );
@@ -246,7 +515,7 @@ export function TripFlow({ source }: { source: PhotoSource }) {
           <SectionLabel>Dates</SectionLabel>
           <ThemedView type="backgroundElement" style={[styles.field, { borderColor: theme.accent }]}>
             <ThemedText type="small">
-              {formatDateRange(editingGroup.trip.startAt, editingGroup.trip.endAt)}
+              {formatTripDateRange(editingGroup.trip.startAt, editingGroup.trip.endAt)}
             </ThemedText>
             <Pill label="auto" />
           </ThemedView>
@@ -285,15 +554,254 @@ export function TripFlow({ source }: { source: PhotoSource }) {
             {withGps} of {editingGroup.trip.photoCount} have location data
           </ThemedText>
 
-          <PrimaryButton label="Save details" onPress={() => setStep('trips')} style={styles.cta} />
+          <PrimaryButton
+            label="Next — review places"
+            onPress={() => {
+              setItineraryOrigin('validate');
+              setStep('itinerary');
+            }}
+            style={styles.cta}
+          />
+        </ScrollView>
+      </PhoneFrame>
+    );
+  }
+
+  // ── Step: itinerary — approve the suggested places ─────────────────
+  if (step === 'itinerary' && editingGroup) {
+    const days = [...new Set(editingGroup.stops.map((s) => s.stop.day))].sort();
+
+    return (
+      <PhoneFrame>
+        <ScreenHeader
+          title="Where you went"
+          subtitle={`${editingGroup.stops.length} stops · ${days.length} day${days.length === 1 ? '' : 's'}`}
+          onBack={() => setStep(itineraryOrigin)}
+        />
+        <StepProgress steps={3} current={STEP_INDEX.itinerary} />
+        <ScrollView contentContainerStyle={styles.body}>
+          <ThemedText type="small" themeColor="textSecondary">
+            Step 3 of 3
+          </ThemedText>
+          <ThemedText type="cardTitle">Check the places</ThemedText>
+          <InfoStrip>
+            Suggested from each photo&apos;s location, on your device. Tap a name to change it.
+          </InfoStrip>
+
+          {/*
+            Every stop has coordinates but none got a name back — the device's
+            geocoder isn't answering. Say so, otherwise a screen full of empty
+            fields reads as a bug in the app. This is the normal state on an
+            Android emulator, which has no working geocoder backend.
+          */}
+          {editingGroup.stops.length > 0 &&
+            editingGroup.stops.every((s) => s.stop.lat != null && s.stop.suggestedName == null) && (
+              <InfoStrip>
+                <ThemedText type="small">
+                  Place lookup isn&apos;t available on this device, so nothing could be suggested.
+                  Your photos&apos; locations were still read — you can name each stop yourself.
+                  {geocodeDiagnosis ? ` (${geocodeDiagnosis})` : ''}
+                </ThemedText>
+              </InfoStrip>
+            )}
+
+          {days.map((day) => (
+            <View key={day}>
+              <SectionLabel>{formatDayHeading(day)}</SectionLabel>
+              {editingGroup.stops
+                .filter((s) => s.stop.day === day)
+                .map(({ stop, photos }) => {
+                  const value = stopNames[stop.id] ?? stop.suggestedName ?? '';
+                  const approved = stopNames[stop.id] != null;
+                  return (
+                    <Card key={stop.id}>
+                      <View style={styles.stopRow}>
+                        <ThemedText type="small" themeColor="textSecondary" style={styles.stopTime}>
+                          {formatTime(stop.startAt)}
+                        </ThemedText>
+                        <View style={styles.stopBody}>
+                          <ThemedView
+                            type="backgroundElement"
+                            style={[styles.field, { borderColor: theme.accent }]}>
+                            <TextInput
+                              value={value}
+                              onChangeText={(text) =>
+                                setStopNames((n) => ({ ...n, [stop.id]: text }))
+                              }
+                              placeholder={
+                                stop.needsManualPlace
+                                  ? 'No location — name it'
+                                  : stop.suggestedName == null
+                                    ? 'Not found — name it'
+                                    : 'Name this place'
+                              }
+                              placeholderTextColor={theme.textSecondary}
+                              style={[styles.input, { color: theme.text }]}
+                            />
+                            {approved ? (
+                              <Pill label="✓" />
+                            ) : stop.suggestedName ? (
+                              <Pill label="suggested" />
+                            ) : null}
+                          </ThemedView>
+
+                          <ThemedText type="small" themeColor="textSecondary">
+                            {[stop.city, stop.country].filter(Boolean).join(', ') ||
+                              (stop.lat != null
+                                ? `${stop.lat.toFixed(4)}, ${stop.lng!.toFixed(4)}`
+                                : 'No location data')}
+                            {' · '}
+                            {stop.photoCount} photo{stop.photoCount === 1 ? '' : 's'}
+                          </ThemedText>
+
+                          <View style={styles.thumbRow}>
+                            {photos.slice(0, 4).map((p) => (
+                              <Thumb key={p.meta.assetId} photo={p} size={44} />
+                            ))}
+                          </View>
+
+                          {!approved && (
+                            <GhostButton
+                              label={stop.suggestedName ? 'Approve' : 'Save name'}
+                              onPress={() =>
+                                setStopNames((n) => ({ ...n, [stop.id]: value }))
+                              }
+                            />
+                          )}
+                        </View>
+                      </View>
+                    </Card>
+                  );
+                })}
+            </View>
+          ))}
+
+          {/*
+            Always forward to the trip list — never back to `itineraryOrigin`.
+            Coming from the details step, returning there means its "Next"
+            button lands you straight back on the itinerary, and the two
+            screens bounce off each other with no way out. Only the header's
+            back arrow retraces where you came from.
+          */}
+          <PrimaryButton label="Done" onPress={() => setStep('trips')} style={styles.cta} />
         </ScrollView>
       </PhoneFrame>
     );
   }
 
   // ── Step: detected trips ───────────────────────────────────────────
+  // ── Step: place photos that recorded no location ──────────────────
+  if (step === 'locate') {
+    const placedCount = unlocatedResults.filter((r) => placements[r.meta.assetId]).length;
+    const remaining = unlocatedResults.length - placedCount;
+    const n = unlocatedResults.length;
+    return (
+      <PhoneFrame>
+        <ScreenHeader
+          title="Where were these?"
+          subtitle={`${n} photo${n === 1 ? '' : 's'} with no location`}
+          onBack={() => setStep('select')}
+        />
+        <StepProgress steps={3} current={STEP_INDEX.locate} />
+        <ScrollView contentContainerStyle={styles.body}>
+          <InfoStrip>
+            These didn&apos;t record where they were taken. Name a place to include one in your
+            trips. Anything left without a place is skipped.
+          </InfoStrip>
+
+          {unlocatedResults.map((r) => {
+            const id = r.meta.assetId;
+            const placed = placements[id];
+            const draft = placeDrafts[id] ?? '';
+            return (
+              <Card key={id}>
+                <View style={styles.locateRow}>
+                  <Thumb photo={r} size={64} />
+                  <View style={styles.locateBody}>
+                    <ThemedText type="small" themeColor="textSecondary">
+                      {formatPhotoMoment(r.meta.capturedAt)}
+                    </ThemedText>
+
+                    {placed ? (
+                      <>
+                        <ThemedText type="smallBold">📍 {placed.label}</ThemedText>
+                        <View style={styles.chipRow}>
+                          <Chip
+                            label="Change"
+                            selected={false}
+                            onPress={() =>
+                              setPlacements((current) => {
+                                const next = { ...current };
+                                delete next[id];
+                                return next;
+                              })
+                            }
+                          />
+                          {remaining > 0 && (
+                            <Chip
+                              label={`Use for the other ${remaining}`}
+                              selected={false}
+                              onPress={() => placeRemaining(placed)}
+                            />
+                          )}
+                        </View>
+                      </>
+                    ) : (
+                      <>
+                        <ThemedView
+                          type="backgroundElement"
+                          style={[styles.field, { borderColor: theme.accent }]}>
+                          <TextInput
+                            value={draft}
+                            onChangeText={(text) =>
+                              setPlaceDrafts((drafts) => ({ ...drafts, [id]: text }))
+                            }
+                            onSubmitEditing={() => lookupPlace(id)}
+                            placeholder="e.g. Füssen, Germany"
+                            placeholderTextColor={theme.textSecondary}
+                            returnKeyType="search"
+                            style={[styles.input, { color: theme.text }]}
+                          />
+                        </ThemedView>
+                        {placeErrors[id] && (
+                          <ThemedText type="small" themeColor="textSecondary">
+                            Couldn&apos;t find that place. Try a city and country.
+                          </ThemedText>
+                        )}
+                        <GhostButton
+                          label="Set location"
+                          disabled={draft.trim().length === 0}
+                          onPress={() => lookupPlace(id)}
+                        />
+                      </>
+                    )}
+                  </View>
+                </View>
+              </Card>
+            );
+          })}
+
+          <PrimaryButton
+            label={
+              placedCount === 0
+                ? `Skip ${n === 1 ? 'it' : `all ${n}`} and continue`
+                : remaining > 0
+                  ? `Continue: ${placedCount} placed, ${remaining} skipped`
+                  : n === 1
+                    ? 'Continue'
+                    : `Continue with all ${placedCount} placed`
+            }
+            onPress={continueFromLocate}
+            style={styles.cta}
+          />
+        </ScrollView>
+      </PhoneFrame>
+    );
+  }
+
   if (step === 'trips') {
     const totalPhotos = tripGroups.reduce((n, g) => n + g.trip.photoCount, 0);
+    const included = tripGroups.filter((g) => !excludedTripIds.has(g.trip.id));
     return (
       <PhoneFrame>
         <ScreenHeader title="We found your trips" subtitle={`${tripGroups.length} trips detected`} />
@@ -304,16 +812,50 @@ export function TripFlow({ source }: { source: PhotoSource }) {
             were taken. Tap ✎ to add details.
           </InfoStrip>
 
-          {tripGroups.map(({ trip, photos }) => {
+          {/*
+            Say plainly what was left out. A silently shrinking photo count is
+            indistinguishable from a clustering bug, and on an emulator the
+            detected home is wherever the AVD claims to be — so this has to be
+            reversible in one tap.
+          */}
+          {homeSkipped > 0 && (
+            <InfoStrip>
+              <ThemedText type="small">
+                Skipped {homeSkipped} photo{homeSkipped === 1 ? '' : 's'} taken near home
+                {homeBase?.label ? ` (${homeBase.label})` : ''}, so everyday life doesn&apos;t turn
+                into trips.
+              </ThemedText>
+            </InfoStrip>
+          )}
+          {homeSkipped > 0 && (
+            <GhostButton
+              label="Include home photos anyway"
+              onPress={() => buildTrips(readyResults, { includeHome: true })}
+            />
+          )}
+          {unplacedSkipped > 0 && (
+            <InfoStrip>
+              <ThemedText type="small">
+                Left out {unplacedSkipped} photo{unplacedSkipped === 1 ? '' : 's'} with no location
+                that you didn&apos;t place.
+              </ThemedText>
+            </InfoStrip>
+          )}
+          {keptHome && homeBase != null && (
+            <GhostButton label="Skip home photos again" onPress={() => buildTrips(readyResults)} />
+          )}
+
+          {tripGroups.map(({ trip, photos, stops }) => {
             const detail = details[trip.id];
             const noGps = photos.filter((p) => !p.meta.hasGps).length;
+            const isIncluded = !excludedTripIds.has(trip.id);
             return (
-              <Card key={trip.id}>
+              <Card key={trip.id} style={isIncluded ? undefined : styles.excluded}>
                 <View style={styles.cardHeader}>
                   <View style={styles.cardHeaderText}>
                     <ThemedText type="cardTitle">{detail?.title || trip.title}</ThemedText>
                     <ThemedText type="small" themeColor="textSecondary">
-                      {formatDateRange(trip.startAt, trip.endAt)} · {trip.photoCount} photos
+                      {formatTripDateRange(trip.startAt, trip.endAt)} · {trip.photoCount} photos
                     </ThemedText>
                     {trip.country && (
                       <ThemedText type="small" themeColor="textSecondary">
@@ -321,14 +863,25 @@ export function TripFlow({ source }: { source: PhotoSource }) {
                       </ThemedText>
                     )}
                   </View>
-                  <IconButton
-                    glyph="✎"
-                    accessibilityLabel={`Edit details for ${detail?.title || trip.title}`}
-                    onPress={() => {
-                      setEditingTripId(trip.id);
-                      setStep('validate');
-                    }}
-                  />
+                  <View style={styles.cardActions}>
+                    <IconButton
+                      glyph={isIncluded ? '✓' : '＋'}
+                      accessibilityLabel={
+                        isIncluded
+                          ? `Don't stamp ${detail?.title || trip.title}`
+                          : `Stamp ${detail?.title || trip.title}`
+                      }
+                      onPress={() => toggleTripIncluded(trip.id)}
+                    />
+                    <IconButton
+                      glyph="✎"
+                      accessibilityLabel={`Edit details for ${detail?.title || trip.title}`}
+                      onPress={() => {
+                        setEditingTripId(trip.id);
+                        setStep('validate');
+                      }}
+                    />
+                  </View>
                 </View>
 
                 <View style={styles.thumbRow}>
@@ -348,13 +901,33 @@ export function TripFlow({ source }: { source: PhotoSource }) {
                   {detail?.category && <Pill label={detail.category} />}
                   {noGps > 0 && <Pill label={`${noGps} without GPS`} />}
                 </View>
+
+                {/*
+                  The itinerary was previously only reachable by going through
+                  the details step, which made it feel like part of editing
+                  rather than something you can just look at.
+                */}
+                {stops.length > 0 && (
+                  <GhostButton
+                    label={`View itinerary — ${stops.length} stop${stops.length === 1 ? '' : 's'}`}
+                    onPress={() => {
+                      setEditingTripId(trip.id);
+                      setItineraryOrigin('trips');
+                      setStep('itinerary');
+                    }}
+                  />
+                )}
               </Card>
             );
           })}
 
           <PrimaryButton
-            label={`Stamp ${tripGroups.length} trip${tripGroups.length === 1 ? '' : 's'}`}
-            onPress={() => setStep('done')}
+            label={`✦ Stamp ${included.length} ${included.length === 1 ? 'trip' : 'trips'}`}
+            disabled={included.length === 0}
+            onPress={() => {
+              stamp(included, details, stopNames);
+              setStep('done');
+            }}
             style={styles.cta}
           />
           <GhostButton label="Start over" onPress={restart} />
@@ -365,12 +938,27 @@ export function TripFlow({ source }: { source: PhotoSource }) {
 
   // ── Step: done / stamped ───────────────────────────────────────────
   if (step === 'done') {
+    // Only what was actually stamped — a deselected trip must not appear on
+    // the celebration screen.
+    const stamped = tripGroups.filter((g) => !excludedTripIds.has(g.trip.id));
+    const stampedPhotos = stamped.reduce((n, g) => n + g.trip.photoCount, 0);
+    const stampedStops = stamped.reduce((n, g) => n + g.stops.length, 0);
     return (
       <PhoneFrame>
-        <ScreenHeader title="Trips stamped!" subtitle="added to your archive" />
+        <ScreenHeader
+          title={stamped.length === 1 ? 'Trip stamped!' : `${stamped.length} trips stamped!`}
+          subtitle="added to your archive"
+          onBack={() => setStep('trips')}
+        />
         <StepProgress steps={3} current={STEP_INDEX.done} />
         <ScrollView contentContainerStyle={styles.body}>
-          {tripGroups.map(({ trip }) => {
+          <View style={styles.statRow}>
+            <Stat value={String(stamped.length)} label={stamped.length === 1 ? 'trip' : 'trips'} />
+            <Stat value={String(stampedPhotos)} label="photos" />
+            <Stat value={String(stampedStops)} label="stops" />
+          </View>
+
+          {stamped.map(({ trip }) => {
             const detail = details[trip.id];
             return (
               <ThemedView key={trip.id} style={styles.stampWrapper}>
@@ -379,7 +967,7 @@ export function TripFlow({ source }: { source: PhotoSource }) {
                     {(detail?.title || trip.title).toUpperCase()}
                   </ThemedText>
                   <ThemedText type="small" themeColor="textSecondary">
-                    {formatDateRange(trip.startAt, trip.endAt)}
+                    {formatTripDateRange(trip.startAt, trip.endAt)}
                   </ThemedText>
                   <ThemedText type="small" themeColor="textSecondary">
                     {trip.photoCount} photos
@@ -392,7 +980,9 @@ export function TripFlow({ source }: { source: PhotoSource }) {
             These trips live only on this device for now — saving to your account comes in a later
             milestone.
           </InfoStrip>
-          <PrimaryButton label="Done" onPress={restart} style={styles.cta} />
+          {onExit && <PrimaryButton label="View my archive" onPress={onExit} style={styles.cta} />}
+          <GhostButton label="Stamp more trips" onPress={restart} />
+          <GhostButton label="Back to detected trips" onPress={() => setStep('trips')} />
         </ScrollView>
       </PhoneFrame>
     );
@@ -412,14 +1002,44 @@ export function TripFlow({ source }: { source: PhotoSource }) {
           on your device — nothing is uploaded.
         </InfoStrip>
 
+        {/*
+          Limited access looks exactly like an empty library from in here, so
+          say so plainly and offer the way out rather than leaving the user
+          staring at photos that "should" be there.
+        */}
+        {source.permission?.accessPrivileges === 'limited' && (
+          <InfoStrip>
+            <ThemedText type="small">
+              Only the photos you specifically shared are visible to Stamped
+              {candidates ? ` (${candidates.length})` : ''}. Tap below to share more.
+            </ThemedText>
+          </InfoStrip>
+        )}
+        {source.permission?.accessPrivileges === 'limited' && source.presentPicker && (
+          <GhostButton label="Select more photos" onPress={source.presentPicker} />
+        )}
+
         {candidates && candidates.length > 0 && (
           <>
             <View style={styles.selectAllRow}>
-              <SectionLabel>{`${candidates.length} photos`}</SectionLabel>
+              <SectionLabel>{`${visibleCandidates.length} photos visible`}</SectionLabel>
               <GhostButton label="Select all" onPress={selectAll} style={styles.selectAll} />
             </View>
+            {screenshotCount > 0 && (
+              <View style={styles.chipRow}>
+                <Chip
+                  label={
+                    showScreenshots
+                      ? `Hide ${screenshotCount} screenshot${screenshotCount === 1 ? '' : 's'}`
+                      : `Show ${screenshotCount} hidden screenshot${screenshotCount === 1 ? '' : 's'}`
+                  }
+                  selected={showScreenshots}
+                  onPress={toggleScreenshots}
+                />
+              </View>
+            )}
             <View style={styles.grid}>
-              {candidates.map((photo) => {
+              {visibleCandidates.map((photo) => {
                 const selected = selectedIds.has(photo.id);
                 return (
                   <View key={photo.id} style={styles.gridItem}>
@@ -452,7 +1072,7 @@ export function TripFlow({ source }: { source: PhotoSource }) {
         <PrimaryButton
           label={`Find trips in ${selectedIds.size} photo${selectedIds.size === 1 ? '' : 's'}`}
           disabled={selectedIds.size === 0}
-          onPress={analyse}
+          onPress={() => analyse()}
           style={styles.cta}
         />
       </ScrollView>
@@ -571,6 +1191,48 @@ const styles = StyleSheet.create({
   },
   cta: {
     marginTop: Spacing.three,
+  },
+  cardActions: {
+    flexDirection: 'row',
+    gap: Spacing.one,
+  },
+  statRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  stat: {
+    flex: 1,
+    borderRadius: Radius.medium,
+    paddingVertical: Spacing.two,
+    alignItems: 'center',
+    gap: Spacing.half,
+  },
+  // Deselected trips stay visible but recede — they're skipped, not deleted.
+  excluded: {
+    opacity: 0.5,
+  },
+  locateRow: {
+    flexDirection: 'row',
+    gap: Spacing.three,
+    alignItems: 'flex-start',
+  },
+  locateBody: {
+    flex: 1,
+    gap: Spacing.two,
+  },
+  stopRow: {
+    flexDirection: 'row',
+    gap: Spacing.two,
+  },
+  stopTime: {
+    // Wide enough for a 12-hour time with AM/PM on one line ("11:35 AM");
+    // at 52 it wrapped mid-meridiem.
+    width: 72,
+    paddingTop: Spacing.three,
+  },
+  stopBody: {
+    flex: 1,
+    gap: Spacing.two,
   },
   stampWrapper: {
     alignItems: 'center',

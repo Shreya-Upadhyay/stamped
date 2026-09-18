@@ -34,14 +34,16 @@ The app runs end to end from first launch through to grouped trips.
 |---|---|---|
 | 1 | **Select photos** | Requests media-library permission, lists your camera roll, multi-select |
 | 2 | **Reading photos** | Live progress while GPS + timestamp are read from each photo |
-| 3 | **We found your trips** | Photos clustered into trips, reverse-geocoded to a city, thumbnails per trip |
+| 3 | **We found your trips** | Photos clustered into trips, each titled by country, thumbnails per trip |
 | 4 | **Add trip details** | Edit the trip name, see auto-detected dates, pick a category |
-| 5 | **Trips stamped** | Passport-stamp summary of each trip |
+| 5 | **Where you went** | Itinerary of stops by day, each with a suggested place name to approve |
+| 6 | **Trips stamped** | Passport-stamp summary of each trip |
 
 Also done:
 
-- **Shared data contract** — `PhotoMeta` and `Trip` types with doc comments (`packages/shared`)
-- **Clustering algorithm** — pure, dependency-free, **15 unit tests** (`packages/shared/src/clustering.ts`)
+- **Shared data contract** — `PhotoMeta`, `Trip` and `TripStop` types with doc comments (`packages/shared`)
+- **Clustering + itinerary logic** — pure, dependency-free, **33 unit tests**
+  (`packages/shared/src/clustering.ts`, `itinerary.ts`)
 - **Design system** — the warm brown/cream/gold Stamped look, light + dark mode
 - **Handles photos with no GPS** as a first-class case, not a crash
 
@@ -246,15 +248,46 @@ One UI, two data sources. That's why the whole experience is reviewable in a bro
 
 ## How trips are grouped
 
-Photos are sorted by time; a **new trip starts** when, versus the previous photo:
+Photos are sorted by capture time. A trip has a **centre** — the running average of the
+located photos in it — and continues while photos stay within **500 km** of that centre.
+The first photo beyond the radius starts a new trip.
 
-- more than **24 hours** have passed, **or**
-- the location is more than **300 km** away (only checked when both photos have GPS)
+Measuring from the trip's centre rather than the previous photo matters: consecutive-photo
+distance lets a slow drift chain across a continent, because each individual hop stays
+under the threshold.
 
-A photo without GPS can only trigger the time rule, never the distance rule. Thresholds are
-options on `segmentPhotosIntoTrips`, not hardcoded. The reasoning — including why this
-doesn't anchor to a "home city" the way `docs/ROADMAP.md` originally sketched — is in
-`docs/adr/0001-on-device-trip-clustering.md`.
+Two deliberate behaviours:
+
+- **Nothing splits on time by default.** A trip runs until the camera actually moves. The
+  side effect is that photos from the same place years apart merge into one trip — most
+  visibly, everyday photos at home. Excluding a home radius is the planned fix (it's why
+  onboarding collects a home city); `tripGapMs` is available meanwhile.
+- **Photos without GPS join the trip in progress and never move its centre**, so a
+  screenshot between two distant places can't bridge them into one trip.
+
+`tripRadiusKm` and `tripGapMs` are options on `segmentPhotosIntoTrips`, not constants.
+Full reasoning in `docs/adr/0001-on-device-trip-clustering.md`.
+
+---
+
+## How places are named
+
+Each trip is then split into **stops** — the places actually visited — by the same
+centroid sweep at a much smaller scale: **1 km** radius, and a **3 hour** pause ends a
+stop even without moving. The itinerary screen lists them by day, in order.
+
+Names are **suggested, never assumed**. Each stop is reverse-geocoded once (not once per
+photo) via `expo-location`, which returns the OS placemark — "Eiffel Tower" — free,
+offline-capable, and with no API key. The app falls back `name → street → district → city`
+when the placemark is just a street number. Every suggestion appears in an editable field
+with an **Approve** button; a stop whose photos all lack GPS asks you to name it instead
+of guessing.
+
+The trip's own country and city are the **most common** values across its stops, so one
+odd stop can't rename the whole trip.
+
+`stopRadiusKm` and `stopGapMs` are options on `segmentTripIntoStops`. Full reasoning in
+`docs/adr/0002-itinerary-stops-and-place-names.md`.
 
 ---
 
@@ -281,9 +314,17 @@ Worth knowing before you start that work:
 ## Known limitations
 
 - **iPhone testing is blocked** without an Apple Developer account or a Mac (above).
-- **City names don't appear on the Android emulator.** `reverseGeocodeAsync` needs Google's
-  geocoder backend, which the emulator can't reach; trips fall back to date-based titles.
-  Works on a real device with network, and on web.
+- **Place lookup needs location permission, and the app asks for it mid-flow.**
+  `reverseGeocodeAsync` is a pure coordinate→address call that never reads the device's
+  own position, but Android gates it behind `ACCESS_COARSE/FINE_LOCATION` anyway — without
+  it the native call rejects with *"Not authorized to use location services"*. The prompt
+  therefore appears during trip detection rather than during onboarding. Declining is
+  handled: stops come through unnamed, the itinerary explains why, and every stop can be
+  named by hand.
+- **Placemark quality varies.** Geocoders return a Plus Code (`HP3W+C7`) or a bare house
+  number (`1`) as the placemark when they have nothing better; `pickPlaceName` filters
+  those out and falls back to street → district → city. What's left is still uneven —
+  landmarks resolve well in towns, remote coordinates often give only a road.
 - **Trips are not saved.** They live in screen state only; leaving the screen loses them.
   Persistence is a later milestone.
 - **Sign-in is presentational** — see *Adding real auth* above.

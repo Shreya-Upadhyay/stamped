@@ -29,3 +29,6 @@ yarn-error.*
 # editor / OS
 .DS_Store
 Thumbs.db
+
+# Extracted photo metadata for clustering tuning — a map of where you have been.
+packages/shared/fixtures/

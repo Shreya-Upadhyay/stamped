@@ -1,3 +1,4 @@
+import type { HomeBase } from '@stamped/shared';
 import { createContext, use, useCallback, useMemo, useState, type ReactNode } from 'react';
 
 /**
@@ -27,6 +28,16 @@ export type Profile = {
 export type Session = {
   signedIn: boolean;
   profile: Profile | null;
+  /**
+   * Where the user lives, as a point — detected from the device's current
+   * position during onboarding, then confirmed or corrected by them.
+   *
+   * Null until it has been established. Clustering excludes photos taken
+   * inside its radius so that everyday life at home doesn't read as travel;
+   * null simply means nothing is excluded.
+   */
+  homeBase: HomeBase | null;
+  setHomeBase: (home: HomeBase | null) => void;
   /** Records the chosen provider and moves to profile confirmation. */
   signInWith: (provider: AuthProvider) => void;
   /** Completes onboarding — this is what unlocks the main app. */
@@ -52,6 +63,7 @@ const SessionContext = createContext<Session | null>(null);
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [signedIn, setSignedIn] = useState(false);
   const [profile, setProfile] = useState<Profile | null>(null);
+  const [homeBase, setHomeBase] = useState<HomeBase | null>(null);
 
   const signInWith = useCallback((provider: AuthProvider) => {
     setProfile({ ...MOCK_PROFILE[provider], provider });
@@ -65,11 +77,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const signOut = useCallback(() => {
     setSignedIn(false);
     setProfile(null);
+    setHomeBase(null);
   }, []);
 
   const value = useMemo(
-    () => ({ signedIn, profile, signInWith, completeOnboarding, signOut }),
-    [signedIn, profile, signInWith, completeOnboarding, signOut],
+    () => ({ signedIn, profile, homeBase, setHomeBase, signInWith, completeOnboarding, signOut }),
+    [signedIn, profile, homeBase, setHomeBase, signInWith, completeOnboarding, signOut],
   );
 
   return <SessionContext value={value}>{children}</SessionContext>;

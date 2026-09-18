@@ -1,4 +1,3 @@
-import { useRouter } from 'expo-router';
 import { ScrollView, StyleSheet, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
@@ -42,8 +41,9 @@ const PERMISSIONS = [
   },
 ] as const;
 
-export default function PermissionsScreen() {
-  const router = useRouter();
+type Props = { onNext: () => void };
+
+export default function PermissionsStep({ onNext }: Props) {
 
   return (
     <PhoneFrame>
@@ -81,7 +81,7 @@ export default function PermissionsScreen() {
           can see why before you decide.
         </InfoStrip>
 
-        <PrimaryButton label="Continue" onPress={() => router.push('/consent')} />
+        <PrimaryButton label="Continue" onPress={onNext} />
       </ScrollView>
     </PhoneFrame>
   );

@@ -8,17 +8,22 @@ export interface LatLng {
 }
 
 export interface ClusterOptions {
-  /** Gap since the previous photo that starts a new trip, in ms. @default 24h */
-  tripGapMs?: number;
   /**
-   * Distance from the previous photo that starts a new trip, in km — only
-   * checked when both photos have GPS. @default 300
+   * How far a photo can be from the trip's centre before it starts a new
+   * trip, in km. @default 500
    */
-  tripDistanceKm?: number;
+  tripRadiusKm?: number;
+  /**
+   * Gap since the previous photo that starts a new trip, in ms.
+   *
+   * Off by default: grouping is distance-driven, so a trip continues until
+   * the camera actually moves somewhere else. Supply a value to also split on
+   * time.
+   */
+  tripGapMs?: number;
 }
 
-const DEFAULT_TRIP_GAP_MS = 24 * 60 * 60 * 1000;
-const DEFAULT_TRIP_DISTANCE_KM = 300;
+const DEFAULT_TRIP_RADIUS_KM = 500;
 const EARTH_RADIUS_KM = 6371;
 
 function toRadians(degrees: number): number {
@@ -43,39 +48,67 @@ export function computeCentroid(points: LatLng[]): LatLng | null {
   return { lat: sum.lat / points.length, lng: sum.lng / points.length };
 }
 
+/** The GPS coordinates of a photo, or null when it has none. */
+function locationOf(photo: PhotoMeta): LatLng | null {
+  if (!photo.hasGps || photo.lat == null || photo.lng == null) return null;
+  return { lat: photo.lat, lng: photo.lng };
+}
+
 /**
- * Groups photos into trips using threshold logic on consecutive,
- * chronologically-sorted photos: a new trip starts when the gap since the
- * previous photo exceeds `tripGapMs`, or (when both photos have GPS) the
- * distance from the previous photo exceeds `tripDistanceKm`. Photos without
- * GPS can only trigger the time-based split, never the distance-based one —
- * see docs/adr/0001-on-device-trip-clustering.md for why this doesn't anchor
- * to a fixed "home" location.
+ * Groups chronologically-sorted photos into trips by proximity.
+ *
+ * A trip has a centre — the running centroid of the located photos in it —
+ * and continues for as long as photos stay within `tripRadiusKm` of it. The
+ * first photo beyond that radius starts a new trip. Optionally a `tripGapMs`
+ * also splits on elapsed time.
+ *
+ * Measuring against the trip's centre rather than the previous photo is the
+ * important part: consecutive-photo distance lets a slow drift chain across a
+ * continent, since each individual hop stays under the threshold.
+ *
+ * Photos without GPS join whichever trip is in progress and never influence
+ * its centre — so a screenshot between two distant places can't bridge them
+ * into one trip. See docs/adr/0001-on-device-trip-clustering.md.
  */
-export function segmentPhotosIntoTrips(photos: PhotoMeta[], options: ClusterOptions = {}): PhotoMeta[][] {
-  const tripGapMs = options.tripGapMs ?? DEFAULT_TRIP_GAP_MS;
-  const tripDistanceKm = options.tripDistanceKm ?? DEFAULT_TRIP_DISTANCE_KM;
+export function segmentPhotosIntoTrips(
+  photos: PhotoMeta[],
+  options: ClusterOptions = {},
+): PhotoMeta[][] {
+  const tripRadiusKm = options.tripRadiusKm ?? DEFAULT_TRIP_RADIUS_KM;
+  const tripGapMs = options.tripGapMs;
 
   const sorted = [...photos].sort((a, b) => a.capturedAt - b.capturedAt);
   const groups: PhotoMeta[][] = [];
+
   let current: PhotoMeta[] = [];
+  let located: LatLng[] = [];
+  let centre: LatLng | null = null;
 
   for (const photo of sorted) {
-    const prev = current[current.length - 1];
-    if (prev) {
-      const timeGap = photo.capturedAt - prev.capturedAt;
-      const bothHaveGps =
-        photo.hasGps && prev.hasGps && photo.lat != null && photo.lng != null && prev.lat != null && prev.lng != null;
-      const distanceJumpKm = bothHaveGps
-        ? haversineDistanceKm({ lat: prev.lat!, lng: prev.lng! }, { lat: photo.lat!, lng: photo.lng! })
-        : null;
-      const startsNewTrip = timeGap > tripGapMs || (distanceJumpKm != null && distanceJumpKm > tripDistanceKm);
-      if (startsNewTrip) {
-        groups.push(current);
-        current = [];
+    const previous = current[current.length - 1];
+    const place = locationOf(photo);
+
+    let startsNewTrip = false;
+    if (previous) {
+      if (tripGapMs != null && photo.capturedAt - previous.capturedAt > tripGapMs) {
+        startsNewTrip = true;
+      } else if (place && centre && haversineDistanceKm(centre, place) > tripRadiusKm) {
+        startsNewTrip = true;
       }
     }
+
+    if (startsNewTrip) {
+      groups.push(current);
+      current = [];
+      located = [];
+      centre = null;
+    }
+
     current.push(photo);
+    if (place) {
+      located.push(place);
+      centre = computeCentroid(located);
+    }
   }
   if (current.length > 0) groups.push(current);
 
@@ -89,6 +122,28 @@ export interface BuildTripParams {
   country: string | null;
 }
 
+/**
+ * "30 May – 4 Jun 2026", collapsing to a single date for a same-day trip.
+ *
+ * Lives here rather than in the app because the fallback trip title is built
+ * from it, and a title and its date line must not disagree.
+ */
+export function formatTripDateRange(startAt: number, endAt: number): string {
+  const opts: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short' };
+  const startDate = new Date(startAt);
+  const endDate = new Date(endAt);
+  const start = startDate.toLocaleDateString(undefined, opts);
+  const end = endDate.toLocaleDateString(undefined, opts);
+  const startYear = startDate.getFullYear();
+  const endYear = endDate.getFullYear();
+
+  if (start === end && startYear === endYear) return `${start} ${startYear}`;
+  // A trip over New Year needs both years, or "31 Dec – 1 Jan 2027" reads as
+  // a single impossible day.
+  if (startYear !== endYear) return `${start} ${startYear} – ${end} ${endYear}`;
+  return `${start} – ${end} ${endYear}`;
+}
+
 /** Builds a Trip record from an already-segmented, non-empty group of photos. */
 export function buildTrip(photos: PhotoMeta[], params: BuildTripParams): Trip {
   const sorted = [...photos].sort((a, b) => a.capturedAt - b.capturedAt);
@@ -98,7 +153,11 @@ export function buildTrip(photos: PhotoMeta[], params: BuildTripParams): Trip {
   return {
     id: params.tripId,
     userId: params.userId,
-    title: params.city ?? `Trip — ${new Date(startAt).toLocaleDateString()}`,
+    // Country first: a trip is "Germany", not the one city the centroid
+    // happened to land in. City is the fallback when the country is unknown;
+    // failing that, the full span — a single date would misread a week-long
+    // trip as a day out.
+    title: params.country ?? params.city ?? `Trip — ${formatTripDateRange(startAt, endAt)}`,
     startAt,
     endAt,
     primaryCity: params.city,

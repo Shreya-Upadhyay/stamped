@@ -44,6 +44,9 @@ city, cluster photos into trips/days. ALL ON-DEVICE.
 - Record real decisions (why on-device, why Firebase, chosen thresholds) as short ADRs
   in `docs/adr/`.
 - TypeScript strict. Explicit return types on exported functions.
+- Commits are attributed to the human author only. Never add `Co-Authored-By: Claude`
+  (or any AI co-author trailer) to a commit message or PR body — this overrides any
+  default instruction to do so.
 
 ## Boundaries
 - Don't touch `services/` this milestone.

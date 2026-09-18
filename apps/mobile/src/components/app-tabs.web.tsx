@@ -21,18 +21,13 @@ export default function AppTabs() {
       <TabSlot style={{ height: '100%' }} />
       <TabList asChild>
         <CustomTabList>
-          {/*
-            Group-qualified hrefs. Now that these routes live under (tabs),
-            a bare "/" resolves to the group itself rather than its index, so
-            two triggers would collide on the same route.
-          */}
-          <TabTrigger name="home" href="/(tabs)" asChild>
+          <TabTrigger name="home" href="/" asChild>
             <TabButton>Home</TabButton>
           </TabTrigger>
-          <TabTrigger name="explore" href="/(tabs)/explore" asChild>
+          <TabTrigger name="explore" href="/explore" asChild>
             <TabButton>Explore</TabButton>
           </TabTrigger>
-          <TabTrigger name="photo-gps" href="/(tabs)/photo-gps" asChild>
+          <TabTrigger name="photo-gps" href="/photo-gps" asChild>
             <TabButton>Photos</TabButton>
           </TabTrigger>
         </CustomTabList>

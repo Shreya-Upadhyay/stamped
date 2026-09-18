@@ -40,6 +40,16 @@ export interface PhotoMeta {
    */
   hasGps: boolean;
 
+  /**
+   * Where `lat`/`lng` came from.
+   *
+   * `'exif'` — read from the file, accurate to metres.
+   * `'manual'` — the user said where the photo was, after it turned up with
+   *   no location. Trustworthy at city scale, not street scale.
+   * `null` — no location at all; the photo is skipped by clustering.
+   */
+  locationSource: 'exif' | 'manual' | null;
+
   /** Capture time as epoch milliseconds, UTC-normalized, for timeline ordering. */
   capturedAt: number;
 
