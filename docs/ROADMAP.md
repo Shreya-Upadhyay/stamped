@@ -26,8 +26,9 @@ sync are later milestones and are noted only so we don't accidentally build them
 |-------------------------------|-------------------------------------------------|-----|
 | Read GPS + timestamp          | On device — `expo-media-library`                | Free, instant, no upload |
 | Reverse-geocode to city/place | On device — `expo-location.reverseGeocodeAsync` | **Free** (OS geocoder, no API key). Sufficient for city/neighborhood level |
-| Cluster photos → trips/days   | Cloud Function (callable)                       | Deterministic, unit-testable, logic off the client |
-| Store metadata                | Firestore                                       | Small docs, cheap |
+| Cluster photos → trips/days   | **On device** — `packages/shared/src/clustering.ts` | Deterministic and unit-tested without a server; instant, works offline (ADR 0001) |
+| Accounts                      | Firebase Auth (email + password)                | No server to run; native config only when social logins arrive (ADR 0003) |
+| Store metadata                | Firestore, `users/{uid}/trips/{tripId}`         | Small docs, cheap |
 | Store image bytes             | Cloud Storage, **lazily**                       | Only kept photos, not all of them |
 | POI / venue names (LATER, M2) | Cloud Function → Places API                     | $17–30 / 1k calls — deferred, not needed for grouping |
 
@@ -123,6 +124,15 @@ export interface GroupTripsResponse {
 
 ## 4. Milestone-1 pipeline
 
+> **Built differently — read this first.** Steps 4–6 below describe a callable
+> Cloud Function. It was never built and is not planned: clustering a few hundred
+> of one user's photos is milliseconds of work the phone can do offline, and
+> shipping every coordinate to a server to get back a grouping the device could
+> compute would cost privacy and latency for nothing. The same threshold logic now
+> lives in `packages/shared/src/clustering.ts`, pure and unit-tested. Firestore
+> stores the result. See ADR 0001 and ADR 0003. The sketch is kept because the
+> segmentation rules it describes are still the ones in use.
+
 1. User grants media-library permission, picks a date window (or selects photos).
 2. **On device:** loop assets → `getAssetInfoAsync` → build the lightweight metadata array.
    No image upload.
@@ -167,11 +177,13 @@ no-GPS photos handled gracefully.
 
 ## 5. Milestone sequence
 
-- **M0 — Foundations (~2 days):** Shared types locked. Callable-function skeleton +
-  Firebase emulator. A seed set of ~50 real photos with *known* correct groupings, for
-  deterministic clustering tests.
-- **M1 — Ingestion → grouping (priority):** the pipeline in §4.
-- **M2 — Enrichment:** lazy image upload + thumbnails; POI/venue resolution (Places + OCR).
+- **M0 — Foundations — done.** Shared types locked; clustering tested against real
+  photos via the offline harness (`packages/shared/src/cluster-report.test.ts`).
+- **M1 — Ingestion → grouping — done.** On device, including stops and place names.
+- **M1.5 — Accounts and storage — done.** Firebase Auth + Firestore; onboarding and the
+  stamped archive survive a restart (ADR 0003). Metadata only.
+- **M2 — Enrichment:** lazy image upload + thumbnails (which is also what would make a
+  restored archive show photos on a second device); POI/venue resolution (Places + OCR).
 - **M3 — Sharing / AI blog:** consumes the structured metadata M1–M2 produced.
 
 Do not pull M2/M3 work into M1.
@@ -194,7 +206,8 @@ Net: the grouping milestone is effectively free to run.
 
 ```
 packages/shared/src/types/   # THE contract. Doc-commented. Read this first.
-services/functions/          # groupTrips callable + clustering + tests
+# services/functions/        # planned, never built — clustering runs on device instead
+firebase/firestore.rules     # access rules; deploy before sharing a build
 apps/mobile/                 # ingestion screen, permission flow, results
 docs/
   ROADMAP.md                 # this file

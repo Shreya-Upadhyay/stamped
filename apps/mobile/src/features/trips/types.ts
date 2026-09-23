@@ -65,6 +65,19 @@ export type TripDetails = {
 };
 
 /**
+ * A trip the user has stamped — the detected trip plus everything they
+ * confirmed about it. This is what gets stored, via `trip-repository`.
+ */
+export type StampedTrip = {
+  id: string;
+  group: TripGroup;
+  details: TripDetails;
+  /** Stop names the user approved or typed, keyed by stop id. */
+  stopNames: Record<string, string>;
+  stampedAt: number;
+};
+
+/**
  * Everything the trip flow needs from the platform. Native supplies this with
  * expo-media-library + expo-location; web supplies fixtures. Keeping the UI
  * behind this seam means the whole flow renders in a browser without native

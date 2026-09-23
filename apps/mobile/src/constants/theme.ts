@@ -24,6 +24,8 @@ export const Colors = {
     border: '#F0E4D0',
     borderMid: '#E8D5C0',
     success: '#2D8A4E',
+    // Warm red, so a failed sign-in reads as an error without shouting.
+    danger: '#A3372A',
   },
   dark: {
     text: '#FAF6F0',
@@ -41,6 +43,7 @@ export const Colors = {
     border: '#4A3020',
     borderMid: '#5A3518',
     success: '#4EBE7C',
+    danger: '#E89185',
   },
 } as const;
 

@@ -1,13 +1,14 @@
-import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
+import { useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, TextInput, View } from 'react-native';
 
 import { ThemedText } from '@/components/themed-text';
 import { PrimaryButton } from '@/components/ui/buttons';
-import { Divider, Field, LogoHeader, SocialButton } from '@/components/ui/onboarding';
+import { Field, LogoHeader } from '@/components/ui/onboarding';
 import { PhoneFrame } from '@/components/ui/phone-frame';
+import { InfoStrip } from '@/components/ui/surfaces';
 import { Spacing } from '@/constants/theme';
-import type { AuthProvider } from '@/features/auth/session';
-
-const MOCK_PHONE = '🇮🇳 +91 98765 43210';
+import { useSession } from '@/features/auth/session';
+import { useTheme } from '@/hooks/use-theme';
 
 /** Greeting that matches the time of day, like the prototype's "Good morning". */
 function greeting(): string {
@@ -18,54 +19,100 @@ function greeting(): string {
 }
 
 type Props = {
-  onProvider: (provider: AuthProvider) => void;
-  onPhone: () => void;
   onSignUp: () => void;
 };
 
-export default function SignInStep({ onProvider, onPhone, onSignUp }: Props) {
+export default function SignInStep({ onSignUp }: Props) {
+  const theme = useTheme();
+  const { signIn, busy, error, clearError, status } = useSession();
 
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
 
+  const unconfigured = status === 'unconfigured';
+  const ready = email.trim().length > 0 && password.length > 0 && !busy && !unconfigured;
+
+  const submit = () => {
+    if (ready) void signIn({ email, password });
+  };
+
+  const edit = (setter: (value: string) => void) => (value: string) => {
+    if (error) clearError();
+    setter(value);
+  };
 
   return (
     <PhoneFrame>
       <LogoHeader subtitle="welcome back" />
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         <View style={styles.intro}>
           <ThemedText style={styles.wave}>👋</ThemedText>
           <ThemedText type="cardTitle" style={styles.center}>
-            {greeting()}, Meera
+            {greeting()}
           </ThemedText>
           <ThemedText type="small" themeColor="textSecondary" style={styles.center}>
             Sign in to your account
           </ThemedText>
         </View>
 
-        <SocialButton icon="🅖" label="Continue with Google" onPress={() => onProvider('google')} />
-        <SocialButton
-          icon="📷"
-          label="Continue with Instagram"
-          onPress={() => onProvider('instagram')}
-        />
-        <SocialButton
-          icon="f"
-          label="Continue with Facebook"
-          onPress={() => onProvider('facebook')}
-        />
-
-        <Divider label="or sign in with mobile OTP" />
-
-        <View style={styles.phoneRow}>
-          <View style={styles.phoneField}>
-            <Field>
-              <ThemedText type="small">{MOCK_PHONE}</ThemedText>
-            </Field>
-          </View>
-          <PrimaryButton
-            label="Send OTP"
-            onPress={onPhone}
-          />
+        <View style={styles.fieldGroup}>
+          <ThemedText type="small" themeColor="textSecondary">
+            Email
+          </ThemedText>
+          <Field>
+            <TextInput
+              value={email}
+              onChangeText={edit(setEmail)}
+              placeholder="you@example.com"
+              placeholderTextColor={theme.textSecondary}
+              autoCapitalize="none"
+              autoCorrect={false}
+              autoComplete="email"
+              keyboardType="email-address"
+              inputMode="email"
+              style={[styles.input, { color: theme.text }]}
+            />
+          </Field>
         </View>
+
+        <View style={styles.fieldGroup}>
+          <ThemedText type="small" themeColor="textSecondary">
+            Password
+          </ThemedText>
+          <Field>
+            <TextInput
+              value={password}
+              onChangeText={edit(setPassword)}
+              placeholder="Your password"
+              placeholderTextColor={theme.textSecondary}
+              secureTextEntry
+              autoCapitalize="none"
+              autoComplete="current-password"
+              onSubmitEditing={submit}
+              style={[styles.input, { color: theme.text }]}
+            />
+          </Field>
+        </View>
+
+        {error && (
+          <ThemedText type="small" themeColor="danger">
+            {error}
+          </ThemedText>
+        )}
+
+        {unconfigured && (
+          <InfoStrip>
+            This build has no Firebase keys, so accounts are switched off. Copy
+            apps/mobile/.env.example to .env and fill it in.
+          </InfoStrip>
+        )}
+
+        <PrimaryButton
+          label={busy ? 'Signing in…' : 'Sign in'}
+          onPress={submit}
+          disabled={!ready}
+          style={styles.submit}
+        />
 
         <View style={styles.footer}>
           <ThemedText type="small" themeColor="textSecondary">
@@ -99,13 +146,16 @@ const styles = StyleSheet.create({
   center: {
     textAlign: 'center',
   },
-  phoneRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
+  fieldGroup: {
+    gap: Spacing.one,
   },
-  phoneField: {
+  input: {
     flex: 1,
+    fontSize: 15,
+    paddingVertical: Spacing.two,
+  },
+  submit: {
+    marginTop: Spacing.two,
   },
   footer: {
     flexDirection: 'row',

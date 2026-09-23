@@ -24,9 +24,13 @@ export default function ConsentStep() {
   const profile = useDraftProfile();
   const { completeOnboarding } = useSession();
 
-  // Marks onboarding complete, then hands off to the app. The tabs layout's
-  // guard now passes, so "/" renders the app rather than bouncing back here.
-  const finish = () => completeOnboarding(profile);
+  // Marks onboarding complete, then hands off to the app. The gate in
+  // app/_layout.tsx now passes, so the tabs show rather than this flow.
+  // The write to the account is not worth waiting on: it only decides whether
+  // onboarding runs again, and it retries on the next launch.
+  const finish = () => {
+    void completeOnboarding(profile);
+  };
 
   return (
     <PhoneFrame>
@@ -55,8 +59,9 @@ export default function ConsentStep() {
         ))}
 
         <InfoStrip>
-          Nothing leaves your device in this build — photos, locations and trips are all read and
-          grouped locally, so these switches are fixed until the backend exists.
+          Your photos never leave your phone. Only the trips you stamp — their dates, places and
+          what was read from each photo — are saved to your account, so they&apos;re still here
+          next time. These switches are fixed for now.
         </InfoStrip>
 
         <PrimaryButton label="Save my preferences" onPress={finish} />

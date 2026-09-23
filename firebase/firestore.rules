@@ -1,0 +1,31 @@
+rules_version = '2';
+
+// Stamped — Firestore access rules.
+//
+// One rule, one idea: a signed-in user can read and write everything under
+// their own `users/{uid}` document, and nothing else. There is no sharing,
+// no public data and no admin surface in the app, so anything broader would
+// only be a way to leak someone's travel history.
+//
+// Deploy these before handing a build to anyone. Firestore's "test mode"
+// default lets the entire internet read and write the database.
+//
+// Firebase console → Firestore Database → Rules → paste → Publish,
+// or: firebase deploy --only firestore:rules
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // The user's profile document, and everything beneath it: trips today,
+    // whatever comes later. `{document=**}` covers subcollections too.
+    match /users/{userId}/{document=**} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
+    // Anything not matched above is denied, including by an authenticated
+    // user. Stated explicitly so it reads as a decision rather than an
+    // oversight.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

@@ -489,7 +489,7 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
           onBack={() => setStep('trips')}
         />
         <StepProgress steps={3} current={STEP_INDEX.validate} />
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <ThemedText type="small" themeColor="textSecondary">
             Step 2 of 3
           </ThemedText>
@@ -579,7 +579,7 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
           onBack={() => setStep(itineraryOrigin)}
         />
         <StepProgress steps={3} current={STEP_INDEX.itinerary} />
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <ThemedText type="small" themeColor="textSecondary">
             Step 3 of 3
           </ThemedText>
@@ -703,7 +703,7 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
           onBack={() => setStep('select')}
         />
         <StepProgress steps={3} current={STEP_INDEX.locate} />
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <InfoStrip>
             These didn&apos;t record where they were taken. Name a place to include one in your
             trips. Anything left without a place is skipped.
@@ -806,7 +806,7 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
       <PhoneFrame>
         <ScreenHeader title="We found your trips" subtitle={`${tripGroups.length} trips detected`} />
         <StepProgress steps={3} current={STEP_INDEX.trips} />
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <InfoStrip>
             We grouped {totalPhotos} photos into {tripGroups.length} trips by where and when they
             were taken. Tap ✎ to add details.
@@ -951,7 +951,7 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
           onBack={() => setStep('trips')}
         />
         <StepProgress steps={3} current={STEP_INDEX.done} />
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <View style={styles.statRow}>
             <Stat value={String(stamped.length)} label={stamped.length === 1 ? 'trip' : 'trips'} />
             <Stat value={String(stampedPhotos)} label="photos" />
@@ -996,7 +996,9 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
         subtitle={loadingCandidates ? 'loading your library…' : `${selectedIds.size} selected`}
       />
       <StepProgress steps={3} current={STEP_INDEX.select} />
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView
+        contentContainerStyle={[styles.body, styles.selectBody]}
+        keyboardShouldPersistTaps="handled">
         <InfoStrip>
           Pick the photos you want grouped into trips. We read each photo&apos;s time and location
           on your device — nothing is uploaded.
@@ -1069,18 +1071,42 @@ export function TripFlow({ source, onExit }: { source: PhotoSource; onExit?: () 
           </ThemedText>
         )}
 
+      </ScrollView>
+
+      {/*
+        Pinned rather than placed after the grid. A real camera roll runs to
+        hundreds of photos, and the button sat below all of them — so starting
+        a run meant scrolling past the entire library to find it.
+      */}
+      <ThemedView style={[styles.selectFooter, { borderTopColor: theme.border }]}>
         <PrimaryButton
           label={`Find trips in ${selectedIds.size} photo${selectedIds.size === 1 ? '' : 's'}`}
           disabled={selectedIds.size === 0}
           onPress={() => analyse()}
-          style={styles.cta}
         />
-      </ScrollView>
+      </ThemedView>
     </PhoneFrame>
   );
 }
 
+const SELECT_FOOTER_HEIGHT = 96;
+
 const styles = StyleSheet.create({
+  selectFooter: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    // The tab bar is a sibling below this screen, not an overlay on top of
+    // it, so the screen's own bottom edge is where this belongs.
+    bottom: 0,
+    paddingHorizontal: Spacing.three,
+    paddingTop: Spacing.two,
+    paddingBottom: Spacing.two,
+    borderTopWidth: StyleSheet.hairlineWidth,
+  },
+  selectBody: {
+    paddingBottom: SELECT_FOOTER_HEIGHT,
+  },
   body: {
     padding: Spacing.three,
     paddingBottom: BottomTabInset + Spacing.six,

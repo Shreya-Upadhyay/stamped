@@ -28,9 +28,14 @@ Detail lives in `docs/`; see pointers at the bottom.
   `package.json`.
 
 ## Current milestone (scope boundary)
-Building through TRIP GROUPING only: read photo GPS + timestamp, reverse-geocode to
-city, cluster photos into trips/days. ALL ON-DEVICE.
-- Do NOT build `services/api`, workers, POI/Places lookups, or AI generation yet.
+Trip grouping — read photo GPS + timestamp, reverse-geocode to city, cluster photos into
+trips/days — plus ACCOUNTS AND STORAGE (see `docs/adr/0003-...`).
+- All photo work stays ON-DEVICE: GPS reading, clustering, stops, place names.
+- Firebase Auth (email + password) and Firestore store the archive. Config lives in
+  `apps/mobile/.env` (see `.env.example`); rules in `firebase/firestore.rules`.
+- Metadata only — still NO image bytes uploaded.
+- Do NOT build `services/api`, workers, Cloud Functions, POI/Places lookups, or AI
+  generation yet.
 - Get GPS via `expo-media-library` `getAssetInfoAsync` (`info.location`), NOT the image
   picker's `exif` field — the picker drops GPS.
 - Treat photos with no GPS as a first-class case; many photos lack it.
@@ -50,6 +55,7 @@ city, cluster photos into trips/days. ALL ON-DEVICE.
 
 ## Boundaries
 - Don't touch `services/` this milestone.
+- Firebase is storage, not a processor: never move clustering or geocoding off-device.
 - Don't upload image bytes yet — metadata only.
 - Don't add paid API calls (Places/geocoding) — on-device geocoding only.
 

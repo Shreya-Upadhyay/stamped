@@ -47,7 +47,7 @@ export function TripItineraryScreen({ tripId, onBack }: { tripId: string; onBack
     return (
       <PhoneFrame>
         <ScreenHeader title="Itinerary" subtitle="not found" onBack={onBack} />
-        <ScrollView contentContainerStyle={styles.body}>
+        <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
           <InfoStrip>This trip is no longer in the archive.</InfoStrip>
         </ScrollView>
       </PhoneFrame>
@@ -64,7 +64,7 @@ export function TripItineraryScreen({ tripId, onBack }: { tripId: string; onBack
         subtitle={`${trip.group.stops.length} stops · ${days.length} ${days.length === 1 ? 'day' : 'days'}`}
         onBack={onBack}
       />
-      <ScrollView contentContainerStyle={styles.body}>
+      <ScrollView contentContainerStyle={styles.body} keyboardShouldPersistTaps="handled">
         {days.length > 1 && (
           <ScrollView
             horizontal

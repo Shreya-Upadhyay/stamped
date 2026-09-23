@@ -1,6 +1,7 @@
 import { formatTripDateRange } from '@stamped/shared';
 import { useRouter } from 'expo-router';
-import { ScrollView, StyleSheet, View } from 'react-native';
+import { useState } from 'react';
+import { Pressable, ScrollView, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -10,6 +11,7 @@ import { PhoneFrame } from '@/components/ui/phone-frame';
 import { Card, InfoStrip, Pill, SectionLabel } from '@/components/ui/surfaces';
 import { BottomTabInset, Radius, Spacing } from '@/constants/theme';
 import { useSession } from '@/features/auth/session';
+import { SettingsScreen } from '@/features/settings/settings-screen';
 import { archiveSummary, useTripArchive } from '@/features/trips/archive';
 import { MoreTile, Thumb } from '@/features/trips/thumb';
 
@@ -22,9 +24,14 @@ export default function HomeScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const { profile } = useSession();
-  const { trips, requestTrip } = useTripArchive();
+  const { trips, requestTrip, loading, saveError } = useTripArchive();
   const summary = archiveSummary(trips);
   const hasTrips = trips.length > 0;
+
+  // Settings is a mode of this tab, not a route — same reasoning as the trip
+  // detail inside the Trips tab (see features/trips/trips-experience.tsx).
+  const [showSettings, setShowSettings] = useState(false);
+  if (showSettings) return <SettingsScreen onClose={() => setShowSettings(false)} />;
 
   // Tapping a trip opens it in the Trips tab, which owns the detail screen.
   const openTrip = (id: string) => {
@@ -45,6 +52,18 @@ export default function HomeScreen() {
               ? `${firstName(profile.name)} · ${profile.homeCity}`
               : 'your travel archive'}
         </ThemedText>
+
+        {/* The only way into settings, so it sits where a profile usually does. */}
+        <Pressable
+          onPress={() => setShowSettings(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Your account and settings"
+          hitSlop={Spacing.two}
+          style={({ pressed }) => [styles.settingsButton, pressed && styles.pressed]}>
+          <ThemedText type="small" themeColor="accent">
+            ⚙
+          </ThemedText>
+        </Pressable>
       </ThemedView>
 
       <ScrollView
@@ -52,6 +71,8 @@ export default function HomeScreen() {
           styles.body,
           { paddingBottom: insets.bottom + BottomTabInset + Spacing.four },
         ]}>
+        {saveError && <InfoStrip>{saveError}</InfoStrip>}
+
         {hasTrips ? (
           <>
             <ThemedText type="heroTitle">Your travel archive</ThemedText>
@@ -93,8 +114,8 @@ export default function HomeScreen() {
               style={styles.cta}
             />
             <InfoStrip>
-              These trips live only for the length of a session — saving to your account arrives
-              with the backend milestone.
+              Stamped trips are saved to your account, so they&apos;re here next time. The photos
+              themselves stay on this phone — only what was read from them is stored.
             </InfoStrip>
           </>
         ) : (
@@ -110,6 +131,12 @@ export default function HomeScreen() {
               onPress={() => router.push('/photo-gps')}
               style={styles.cta}
             />
+
+            {loading && (
+              <ThemedText type="small" themeColor="textSecondary">
+                Checking your account for trips you&apos;ve already stamped…
+              </ThemedText>
+            )}
 
             <SectionLabel>How it works</SectionLabel>
             {[
@@ -149,6 +176,15 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     paddingBottom: Spacing.three,
     paddingHorizontal: Spacing.four,
+  },
+  settingsButton: {
+    position: 'absolute',
+    right: Spacing.three,
+    bottom: Spacing.three,
+    padding: Spacing.one,
+  },
+  pressed: {
+    opacity: 0.6,
   },
   headerSub: {
     marginTop: Spacing.half,

@@ -16,8 +16,7 @@ export type ThemedTextProps = TextProps & {
     | 'screenTitle'
     | 'cardTitle'
     | 'wordmark'
-    | 'heroTitle'
-    | 'otpDigit';
+    | 'heroTitle';
   themeColor?: ThemeColor;
 };
 
@@ -40,7 +39,6 @@ export function ThemedText({ style, type = 'default', themeColor, ...rest }: The
         type === 'cardTitle' && styles.cardTitle,
         type === 'wordmark' && styles.wordmark,
         type === 'heroTitle' && styles.heroTitle,
-        type === 'otpDigit' && styles.otpDigit,
         style,
       ]}
       {...rest}
@@ -110,11 +108,6 @@ const styles = StyleSheet.create({
     fontFamily: Fonts.serif,
     fontSize: 26,
     lineHeight: 34,
-    fontWeight: '700',
-  },
-  otpDigit: {
-    fontSize: 24,
-    lineHeight: 30,
     fontWeight: '700',
   },
 });

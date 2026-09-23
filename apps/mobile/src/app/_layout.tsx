@@ -4,6 +4,8 @@ import { StyleSheet, useColorScheme, View } from 'react-native';
 
 import { AnimatedSplashOverlay } from '@/components/animated-icon';
 import AppTabs from '@/components/app-tabs';
+import { ThemedText } from '@/components/themed-text';
+import { ThemedView } from '@/components/themed-view';
 import { SessionProvider, useSession } from '@/features/auth/session';
 import { TripArchiveProvider } from '@/features/trips/archive';
 import { OnboardingFlow } from '@/features/onboarding/onboarding-flow';
@@ -24,8 +26,23 @@ SplashScreen.preventAutoHideAsync();
  *    Routing it meant route groups and redirect guards, which looped.
  */
 function OnboardingGate() {
-  const { signedIn } = useSession();
-  if (signedIn) return null;
+  const { status, onboarded } = useSession();
+
+  // Firebase replays a stored sign-in asynchronously, and the splash animates
+  // away on its own schedule. Holding a branded screen over the gap keeps a
+  // returning user from seeing an empty Home, or a flash of onboarding they
+  // finished months ago.
+  if (status === 'loading') {
+    return (
+      <ThemedView type="brand" style={[StyleSheet.absoluteFill, styles.holding]}>
+        <ThemedText type="wordmark" themeColor="onBrand">
+          STAMPED
+        </ThemedText>
+      </ThemedView>
+    );
+  }
+
+  if (status === 'signed-in' && onboarded) return null;
 
   return (
     <View style={StyleSheet.absoluteFill}>
@@ -40,12 +57,19 @@ export default function RootLayout() {
   return (
     <SessionProvider>
       <TripArchiveProvider>
-      <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
-        <AnimatedSplashOverlay />
-        <AppTabs />
-        <OnboardingGate />
-      </ThemeProvider>
+        <ThemeProvider value={colorScheme === 'dark' ? DarkTheme : DefaultTheme}>
+          <AnimatedSplashOverlay />
+          <AppTabs />
+          <OnboardingGate />
+        </ThemeProvider>
       </TripArchiveProvider>
     </SessionProvider>
   );
 }
+
+const styles = StyleSheet.create({
+  holding: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+});

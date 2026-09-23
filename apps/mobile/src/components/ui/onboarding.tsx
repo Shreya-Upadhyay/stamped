@@ -1,5 +1,5 @@
 import { useEffect, useRef, type ReactNode } from 'react';
-import { Animated, Easing, Pressable, StyleSheet, View, type ViewStyle } from 'react-native';
+import { Animated, Easing, StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { ThemedText } from '@/components/themed-text';
@@ -66,47 +66,6 @@ export function GlobeEmblem({ size = 132 }: { size?: number }) {
   );
 }
 
-/** White pill button for a social provider. */
-export function SocialButton({
-  icon,
-  label,
-  onPress,
-}: {
-  icon: ReactNode;
-  label: string;
-  onPress: () => void;
-}) {
-  const theme = useTheme();
-  return (
-    <Pressable onPress={onPress} style={({ pressed }) => pressed && styles.pressed}>
-      <ThemedView
-        type="backgroundElement"
-        style={[styles.socialButton, { borderColor: theme.borderMid }]}>
-        <View style={styles.socialIcon}>
-          {typeof icon === 'string' ? <ThemedText style={styles.socialEmoji}>{icon}</ThemedText> : icon}
-        </View>
-        <ThemedText type="smallBold" style={styles.socialLabel}>
-          {label}
-        </ThemedText>
-      </ThemedView>
-    </Pressable>
-  );
-}
-
-/** "or sign up with mobile" divider. */
-export function Divider({ label }: { label: string }) {
-  const theme = useTheme();
-  return (
-    <View style={styles.divider}>
-      <View style={[styles.dividerLine, { backgroundColor: theme.borderMid }]} />
-      <ThemedText type="small" themeColor="textSecondary">
-        {label}
-      </ThemedText>
-      <View style={[styles.dividerLine, { backgroundColor: theme.borderMid }]} />
-    </View>
-  );
-}
-
 /** Read-only field with an optional trailing element (e.g. an "auto" pill). */
 export function Field({
   children,
@@ -125,33 +84,6 @@ export function Field({
       <View style={styles.fieldContent}>{children}</View>
       {trailing}
     </ThemedView>
-  );
-}
-
-/** Six OTP entry boxes; `value` fills them left to right. */
-export function OtpBoxes({ value, length = 6 }: { value: string; length?: number }) {
-  const theme = useTheme();
-  return (
-    <View style={styles.otpRow}>
-      {Array.from({ length }).map((_, i) => {
-        const digit = value[i] ?? '';
-        const isCursor = i === value.length;
-        return (
-          <ThemedView
-            key={i}
-            type={digit ? 'accentLight' : 'backgroundElement'}
-            style={[
-              styles.otpBox,
-              {
-                borderColor: digit || isCursor ? theme.brand : theme.borderMid,
-                borderWidth: digit || isCursor ? 2 : 1.5,
-              },
-            ]}>
-            <ThemedText type="otpDigit">{digit}</ThemedText>
-          </ThemedView>
-        );
-      })}
-    </View>
   );
 }
 
@@ -222,38 +154,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  socialButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderRadius: Radius.pill,
-    paddingHorizontal: Spacing.three,
-    paddingVertical: Spacing.three,
-    marginBottom: Spacing.two,
-  },
-  socialIcon: {
-    width: 26,
-    alignItems: 'center',
-  },
-  socialEmoji: {
-    fontSize: 18,
-    lineHeight: 22,
-  },
-  socialLabel: {
-    flex: 1,
-    textAlign: 'center',
-    marginRight: 26,
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: Spacing.two,
-    marginVertical: Spacing.three,
-  },
-  dividerLine: {
-    flex: 1,
-    height: StyleSheet.hairlineWidth,
-  },
   field: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -269,18 +169,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: Spacing.two,
     flex: 1,
-  },
-  otpRow: {
-    flexDirection: 'row',
-    gap: Spacing.two,
-    justifyContent: 'center',
-  },
-  otpBox: {
-    width: 48,
-    height: 58,
-    borderRadius: Radius.medium,
-    alignItems: 'center',
-    justifyContent: 'center',
   },
   toggleTrack: {
     width: 44,
@@ -307,8 +195,5 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     marginTop: Spacing.four,
     marginBottom: Spacing.two,
-  },
-  pressed: {
-    opacity: 0.7,
   },
 });

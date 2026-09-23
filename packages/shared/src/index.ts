@@ -7,3 +7,4 @@ export * from './place';
 export * from './placement';
 export * from './types/stop';
 export * from './itinerary';
+export * from './archive-doc';

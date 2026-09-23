@@ -4,6 +4,8 @@ node_modules/
 # secrets
 .env
 .env.*
+# ...except the template, which carries names only and no values
+!.env.example
 
 # Expo / Metro
 .expo/
