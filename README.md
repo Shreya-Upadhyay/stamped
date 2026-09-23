@@ -363,50 +363,103 @@ one file, but each has a setup cost outside the code:
 
 Reasoning in `docs/adr/0003-firebase-backend-and-accounts.md`.
 
-## Building an APK to share
+## Shipping builds
 
-Produces one installable file testers can sideload — no Play Store, no review.
+Both platforms build in the cloud through EAS, so neither needs a Mac, an Android SDK
+or a JDK. All commands run from `apps/mobile`.
 
-```bash
-cd apps/mobile/android && ./gradlew app:assembleRelease -x lint -x test
-```
+| Command | Produces |
+|---|---|
+| `npm run build:apk` | APK, built locally in ~2 min. Fastest loop while developing. |
+| `npm run build:android` | APK via EAS, with a download link to send testers. |
+| `npm run build:ios` | iOS build for registered devices (ad-hoc). |
+| `npm run build:testflight` | iOS build for TestFlight. |
+| `npm run submit:ios` | Uploads the last iOS build to TestFlight. |
+| `npm run build:play` | Android App Bundle for the Play Store. |
 
-Output: `apps/mobile/android/app/build/outputs/apk/release/app-release.apk`.
-Send it however you like; testers tap it and allow "install from unknown sources".
+### The Firebase config in cloud builds
 
-**Java 17 is required.** Android Studio now bundles JDK 25, and the CMake configure
-step for `react-native-worklets` fails on it after ~14 minutes with the unhelpful
-message *"WARNING: A restricted method in java.lang.System has been called"*. Point
-`JAVA_HOME` at a JDK 17 first — Gradle keeps one at
-`~/.gradle/jdks/eclipse_adoptium-17-amd64-windows.2` if it has ever provisioned one:
-
-```bash
-export JAVA_HOME=~/.gradle/jdks/eclipse_adoptium-17-amd64-windows.2
-```
-
-After changing `app.json` (name, icon, permissions), regenerate the native project
-first, or the change won't reach the manifest:
+Cloud builds never see `apps/mobile/.env` — it's gitignored, so it isn't uploaded.
+The same values live on EAS instead, and are already set for the development, preview
+and production environments. To change one (after rotating a key, or moving project):
 
 ```bash
-cd apps/mobile && npx expo prebuild --platform android --clean
+npx eas-cli env:set --name EXPO_PUBLIC_FIREBASE_API_KEY --value "new-value"   --visibility plaintext --environment production --environment preview --environment development
+npx eas-cli env:list          # see what's set
 ```
 
-### Before sharing it more widely
+Keep `.env` in step, since local builds read that instead.
 
-- **It's signed with the debug key.** Fine for sideloading; the Play Store needs a
-  real keystore, and switching keys later means testers reinstall rather than update.
-- **The package is still `com.anonymous.mobile`.** Changing it later also forces a
-  reinstall, so change it before the APK goes far.
-- **The Firebase config is baked in at build time** from `apps/mobile/.env`. Rebuild
-  after changing it, and deploy `firebase/firestore.rules` before anyone installs.
-- **iOS has no equivalent.** Any installable iOS build needs the Apple Developer
-  Program ($99/year) plus TestFlight or per-device ad-hoc registration.
+### Local APK builds need JDK 17
+
+`npm run build:apk` finds one and refuses to start without it, which is deliberate:
+Android Studio now bundles JDK 25, and on that the CMake step for
+`react-native-worklets` fails after about fourteen minutes with *"WARNING: A restricted
+method in java.lang.System has been called"* — a message that says nothing about Java
+versions. Gradle keeps a 17 at `~/.gradle/jdks/` once it has provisioned one; otherwise
+install [Temurin 17](https://adoptium.net/temurin/releases/?version=17).
+
+After changing `app.json` — name, icon, permissions, identifiers — regenerate the
+native project or the change never reaches the manifest:
+
+```bash
+npx expo prebuild --platform android --clean
+```
+
+### Before an APK goes far
+
+- **It's signed with a debug key.** Fine for sideloading. The Play Store needs a real
+  keystore, and changing keys later makes testers uninstall rather than update.
+- **Rules first.** Deploy `firebase/firestore.rules` before anyone installs.
+
+---
+
+## iOS
+
+The app is configured for iOS — bundle id `com.stamped.app`, the location usage string
+App Review requires, and the encryption declaration TestFlight asks for. What's missing
+is the account.
+
+**Any iOS build that runs on a real device needs the Apple Developer Program**, at
+$99/year. There is no free path: unlike Android, Apple does not allow sideloading a
+file you were emailed. Without the membership, builds can only run in a Mac simulator.
+
+### Once enrolled
+
+Enrol at [developer.apple.com/programs](https://developer.apple.com/programs/). Apple
+usually approves within 24–48 hours, longer if they ask for identification.
+
+```bash
+cd apps/mobile
+npm run build:testflight     # EAS asks you to sign in to Apple the first time
+npm run submit:ios           # uploads it to TestFlight
+```
+
+EAS creates the App Store Connect record, the signing certificate and the provisioning
+profile on the first run, and reuses them afterwards. You sign in to Apple yourself;
+the credentials are handled between you and Apple.
+
+Then add testers by email in App Store Connect → TestFlight. Internal testers (up to
+100, on your team) get builds immediately; external testers need a one-time review of
+the build, usually a day.
+
+### Ad-hoc, without TestFlight
+
+For a handful of known devices, skipping Apple's review:
+
+```bash
+npx eas-cli device:create    # sends a registration link to each device
+npm run build:ios
+```
+
+Capped at 100 devices a year, and every new device needs a rebuild.
 
 ---
 
 ## Known limitations
 
-- **iPhone testing is blocked** without an Apple Developer account or a Mac (above).
+- **iPhone builds need the Apple Developer Program** ($99/year) — see *iOS* above.
+  Everything else for iOS is configured and waiting.
 - **Place lookup needs location permission, and the app asks for it mid-flow.**
   `reverseGeocodeAsync` is a pure coordinate→address call that never reads the device's
   own position, but Android gates it behind `ACCESS_COARSE/FINE_LOCATION` anyway — without

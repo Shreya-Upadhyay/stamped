@@ -16,6 +16,19 @@ Detail lives in `docs/`; see pointers at the bottom.
 - Run app: `cd apps/mobile && npx expo start`
 - Health check: `cd apps/mobile && npx expo-doctor`
 - Realign deps to SDK: `cd apps/mobile && npx expo install --fix`
+- Shareable APK, local (needs JDK 17): `cd apps/mobile && npm run build:apk`
+- Shareable APK, cloud: `cd apps/mobile && npm run build:android`
+- iOS TestFlight build: `cd apps/mobile && npm run build:testflight` (needs the
+  Apple Developer Program; see README)
+- After ANY `app.json` change: `cd apps/mobile && npx expo prebuild --platform android --clean`
+
+## Build facts that bite
+- **JDK 17 only.** Android Studio's bundled JDK 25 fails the react-native-worklets
+  CMake step after ~14 minutes with a message that never mentions Java.
+- **Cloud builds don't read `.env`** (it's gitignored). The same keys live on EAS —
+  change both together, via `npx eas-cli env:set`.
+- App identifier is `com.stamped.app` on both platforms. Changing it forces every
+  tester to reinstall.
 
 ## DEPENDENCY RULES — load-bearing (the previous repo died here)
 - Add any `expo-*` or `react-native-*` package ONLY with `npx expo install <pkg>`.

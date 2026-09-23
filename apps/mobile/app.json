@@ -9,7 +9,7 @@
     "userInterfaceStyle": "automatic",
     "ios": {
       "icon": "./assets/expo.icon",
-      "bundleIdentifier": "com.anonymous.mobile",
+      "bundleIdentifier": "com.stamped.app",
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false
       }
@@ -27,7 +27,7 @@
         "android.permission.READ_MEDIA_VISUAL_USER_SELECTED",
         "android.permission.ACCESS_MEDIA_LOCATION"
       ],
-      "package": "com.anonymous.mobile"
+      "package": "com.stamped.app"
     },
     "web": {
       "output": "static",
@@ -51,6 +51,15 @@
           "granularPermissions": [
             "photo"
           ]
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Allow Stamped to use your location to name the places in your trips, and to set your home city.",
+          "locationAlwaysAndWhenInUsePermission": false,
+          "locationAlwaysPermission": false,
+          "motionUsagePermission": false
         }
       ]
     ],
