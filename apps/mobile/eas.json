@@ -15,7 +15,6 @@
     "preview": {
       "distribution": "internal",
       "environment": "preview",
-      "channel": "preview",
       "android": {
         "buildType": "apk"
       },
@@ -26,9 +25,14 @@
     "production": {
       "autoIncrement": true,
       "environment": "production",
-      "channel": "production",
       "android": {
         "buildType": "app-bundle"
+      }
+    },
+    "ios-check": {
+      "extends": "preview",
+      "ios": {
+        "simulator": true
       }
     }
   },

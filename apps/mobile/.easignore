@@ -1,0 +1,13 @@
+# What EAS does NOT need uploaded.
+#
+# EAS regenerates the native projects from app.json on its own build machines,
+# so shipping the local copies is pure waste — with android/app/build present
+# the archive was 590 MB, and every build paid for that upload.
+android/
+ios/
+
+# Build outputs and local-only material.
+*.apk
+*.aab
+*.keystore
+.expo/

@@ -424,6 +424,26 @@ is the account.
 $99/year. There is no free path: unlike Android, Apple does not allow sideloading a
 file you were emailed. Without the membership, builds can only run in a Mac simulator.
 
+### Checking iOS without an Apple account
+
+A simulator build needs no Apple ID, no signing and no payment, so it can prove the
+iOS project builds and that the config plugins produce the right `Info.plist` before
+you spend anything:
+
+```bash
+npx eas-cli build --platform ios --profile ios-check
+```
+
+That is what the `ios-check` profile in `eas.json` is for. Verified on 23 Sept 2026:
+bundle id `com.stamped.app`, the location and photo-library usage strings present,
+and no always-location or motion keys — the app asks for nothing it doesn't use.
+
+### Someone else building iOS for you
+
+If a person with their own Apple Developer membership is putting this on TestFlight,
+point them at `docs/ios-handover.md` — it covers the repo, the Firebase values, the
+EAS setup and the two decisions worth making before they start.
+
 ### Once enrolled
 
 Enrol at [developer.apple.com/programs](https://developer.apple.com/programs/). Apple
